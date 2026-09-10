@@ -7,19 +7,20 @@
 #   make            build bcm_shim.ko bcm_compat.ko
 #   make clean
 #
-#   make -C /home/n8n/cudy_be3600/kernel-6.6/src/linux-6.6.93 \
-#        O=/home/n8n/cudy_be3600/kernel-6.6/build \
-#        M=/home/n8n/cudy_be3600/bsp-6.6/compat \
+#   make -C $(REPO)/kernel-6.6/src/linux-6.6.93 \
+#        O=$(REPO)/kernel-6.6/build \
+#        M=$(REPO)/bsp-6.6/compat \
 #        ARCH=arm \
-#        CROSS_COMPILE=/home/n8n/cudy_be3600/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi- \
+#        CROSS_COMPILE=$(REPO)/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi- \
 #        modules
 #
 # Native/smoke build against another tree:
 #   make KDIR=/path/to/src KOUT=/path/to/build CROSS= ARCH=
 
-KDIR    ?= /home/n8n/cudy_be3600/kernel-6.6/src/linux-6.6.93
-KOUT    ?= /home/n8n/cudy_be3600/kernel-6.6/build
-CROSS   ?= /home/n8n/cudy_be3600/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi-
+REPO    ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+KDIR    ?= $(REPO)/kernel-6.6/src/linux-6.6.93
+KOUT    ?= $(REPO)/kernel-6.6/build
+CROSS   ?= $(REPO)/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi-
 ARCH    ?= arm
 M       := $(CURDIR)
 

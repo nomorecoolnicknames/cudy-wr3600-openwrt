@@ -1,129 +1,155 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# update-from-release.sh — update a Cudy WR3600 that ALREADY runs this
-# firmware (Linux 6.6 / OpenWrt 24.10) to a newer bootfs/rootfs, in place.
+# update-from-release.sh - update a Cudy WR3600 that ALREADY runs this
+# firmware (Linux 6.6 / OpenWrt 24.10) to a newer bootfs/rootfs.
 #
-#   scp -O bootfs-release.itb rootfs-forum.sq ubiwrite update-from-release.sh root@192.168.10.1:/tmp/
-#   ssh root@192.168.10.1 'sh /tmp/update-from-release.sh /tmp/bootfs-release.itb /tmp/rootfs-forum.sq'
+#   scp -O bootfs-release.itb rootfs-forum.sq root@192.168.10.1:/tmp/
+#   ssh root@192.168.10.1 'sh /usr/bin/update-from-release.sh \
+#       /tmp/bootfs-release.itb /tmp/rootfs-forum.sq'
 #
-# How it works: the running rootfs is a read-only squashfs served straight
-# from the UBI volume, so the volume cannot be rewritten underneath it. The
-# script therefore copies busybox, its libc loader and ubiwrite into a tmpfs,
-# bind-mounts that copy of /lib over the real one, stops the services,
-# re-execs itself from RAM (the same idea as OpenWrt's sysupgrade stage2) and
-# only then replaces the volumes of the slot it was booted from. It ends with
-# a hard reboot; the board resets through the watchdog.
+# How it works (A/B): the running rootfs is served by a ubiblock device on its
+# own UBI volume, and a volume that is in use CANNOT be rewritten - the first
+# version of this script tried exactly that and died with
+# "UBI_IOCVOLUP: Device or resource busy" (verified on hardware). So the new
+# images go into the OTHER slot, which is idle, are verified by reading them
+# back, the bootloader metadata is pointed at that slot and the board reboots.
+# The slot we were running from stays untouched and becomes the fallback.
 #
-# ubiwrite = tools/ubiwrite.c from the source package (static ARM build). If
-# it is not in the image, copy the binary to /tmp/ubiwrite first.
-# Nothing else is touched (loader, u-boot, bdinfo, the other slot).
+# The factory firmware normally sits in the other slot. Overwriting it erases
+# the "return to stock" rollback, so the script refuses unless FORCE=1 is given
+# (and then says so loudly).
+#
+# Variables: DRYRUN=1 (plan only), FORCE=1 (allow replacing a foreign rootfs),
+#            REBOOT=no (do not reboot at the end), UBIWRITE=<path>,
+#            META_DIR=<dir with meta-committed{1,2}.bin>
 set -e
 
 BOOTFS=${1:?usage: update-from-release.sh <bootfs.itb> <rootfs.sq>}
 ROOTFS=${2:?usage: update-from-release.sh <bootfs.itb> <rootfs.sq>}
-RAM=/tmp/upd66
-DRYRUN=${DRYRUN:-0}          # DRYRUN=1: go through the whole RAM stage, write nothing, reboot
+DRYRUN=${DRYRUN:-0}
+FORCE=${FORCE:-0}
+REBOOT=${REBOOT:-yes}
+UBIWRITE=${UBIWRITE:-/usr/bin/ubiwrite}
+META_DIR=${META_DIR:-/usr/share/cudy}
 LEB=126976
 
 say() { echo "==> $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# ---------------------------------------------------------------------------
-# stage 2: runs from RAM only (re-exec'd below with PATH=$RAM)
-# ---------------------------------------------------------------------------
-if [ "$UPD66_STAGE2" = 1 ]; then
-	BVOL=$3; RVOL=$4; BSHA=$5; RSHA=$6
-	cd "$RAM"
-	if [ "$DRYRUN" = 1 ]; then
-		say "stage2: DRYRUN — RAM stage works (sh/head/sha256sum/ubiwrite from $RAM), not writing, rebooting"
-		./ubiwrite 2>&1 | head -1 || true
-		sync; reboot -f; sleep 120; exit 0
-	fi
-	say "stage2: writing $BVOL"
-	./ubiwrite "$BVOL" "$BOOTFS"
-	say "stage2: writing $RVOL"
-	./ubiwrite "$RVOL" "$ROOTFS"
-	sync
-	bsize=$(wc -c < "$BOOTFS"); rsize=$(wc -c < "$ROOTFS")
-	b=$(head -c "$bsize" "$BVOL" | sha256sum | cut -c1-64)
-	r=$(head -c "$rsize" "$RVOL" | sha256sum | cut -c1-64)
-	if [ "$b" = "$BSHA" ] && [ "$r" = "$RSHA" ]; then
-		say "stage2: verified, rebooting"
-	else
-		say "stage2: READBACK MISMATCH (bootfs $([ "$b" = "$BSHA" ] && echo ok || echo BAD), rootfs $([ "$r" = "$RSHA" ] && echo ok || echo BAD))"
-		say "stage2: rebooting anyway; if this slot no longer boots, the watchdog fuse returns the board to the other slot"
-	fi
-	sync
-	echo 10 > /proc/bcm96764_wdt_kick_secs 2>/dev/null || true
-	reboot -f
-	sleep 120
-	exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# stage 1: checks, copy to RAM, re-exec
-# ---------------------------------------------------------------------------
-[ -f /etc/cudy-release ] || die "this is not the 6.6/OpenWrt release; use install-on-router.sh on the stock firmware"
 [ -f "$BOOTFS" ] || die "no such file: $BOOTFS"
 [ -f "$ROOTFS" ] || die "no such file: $ROOTFS"
 
-if command -v ubiwrite >/dev/null 2>&1; then
-	UBIWRITE=$(command -v ubiwrite)
-elif [ -x /tmp/ubiwrite ]; then
-	UBIWRITE=/tmp/ubiwrite
+# ---------------------------------------------------------------------------
+# Which slot are we running from? The mounted squashfs is the only reliable
+# answer - U-Boot's bootargs named the committed slot even when the preinit
+# had fallen back to the other one (verified on hardware).
+# ---------------------------------------------------------------------------
+ROOTDEV=$(awk '$2 == "/rom" { print $1 }' /proc/mounts)
+case "$ROOTDEV" in
+*ubiblock0_4*) RUN=1 ;;
+*ubiblock0_6*) RUN=2 ;;
+*) die "cannot tell which slot is running (no /rom ubiblock in /proc/mounts)" ;;
+esac
+
+if [ "$RUN" = 1 ]; then
+	TGT=2; BVOL=/dev/ubi0_5; RVOL=/dev/ubi0_6
 else
-	die "ubiwrite not found: copy the static binary to /tmp/ubiwrite"
+	TGT=1; BVOL=/dev/ubi0_3; RVOL=/dev/ubi0_4
+fi
+say "running slot $RUN ($ROOTDEV); updating slot $TGT ($BVOL, $RVOL)"
+
+# ---------------------------------------------------------------------------
+# What is in the target slot now?
+# ---------------------------------------------------------------------------
+FOREIGN=0
+mkdir -p /tmp/upd66-mnt
+if [ -b "$RVOL" ] && mount -t squashfs -o ro "$RVOL" /tmp/upd66-mnt 2>/dev/null; then
+	[ -f /tmp/upd66-mnt/etc/cudy-release ] || FOREIGN=1
+	umount /tmp/upd66-mnt 2>/dev/null || true
+fi
+if [ "$FOREIGN" = 1 ]; then
+	if [ "$FORCE" != 1 ]; then
+		die "slot $TGT holds a foreign rootfs (the factory firmware?).
+     Updating would erase the rollback to stock. Re-run with FORCE=1 if that is
+     what you want - the slot you are running now then becomes the fallback."
+	fi
+	say "WARNING: slot $TGT holds a foreign rootfs - replacing it, the rollback to stock is lost"
 fi
 
-# Which slot are we running from? NOT from the kernel command line: U-Boot's
-# root=/dev/ubiblock0_N in /chosen/bootargs does not always match the image
-# it loaded (seen on the bench: bootargs said slot 2 while bootfs1 was booted
-# and the preinit fell back to rootfs1). The squashfs that is actually
-# mounted is the truth; OpenWrt keeps it at /rom under the overlay.
-ROOTDEV=$(awk '$2=="/rom" || $2=="/" {print $1}' /proc/mounts | grep -oE 'ubiblock0_[46]' | head -1)
-case "$ROOTDEV" in
-ubiblock0_4) SLOT=1; BVOL=/dev/ubi0_3; RVOL=/dev/ubi0_4 ;;
-ubiblock0_6) SLOT=2; BVOL=/dev/ubi0_5; RVOL=/dev/ubi0_6 ;;
-*) die "cannot tell which slot the running rootfs comes from (/proc/mounts has no ubiblock0_4/6)" ;;
-esac
-# Never overwrite a slot that does not carry this firmware (the factory slot
-# is the rollback): the running rootfs has the marker, so the slot it lives
-# in is ours by definition — that is the only slot we touch.
-
-bsize=$(wc -c < "$BOOTFS")
-[ "$bsize" -le $((27 * LEB)) ] || die "bootfs is $bsize bytes; over 27 LEB it does not boot"
+# ---------------------------------------------------------------------------
+# Sizes and hashes
+# ---------------------------------------------------------------------------
+bsize=$(wc -c < "$BOOTFS"); rsize=$(wc -c < "$ROOTFS")
+bmax=$((27 * LEB))
+[ "$bsize" -le "$bmax" ] || die "bootfs is $bsize bytes, the slot holds at most $bmax"
 bsha=$(sha256sum "$BOOTFS" | cut -c1-64)
 rsha=$(sha256sum "$ROOTFS" | cut -c1-64)
-say "booted from slot $SLOT ($BVOL, $RVOL)"
-say "new bootfs $(echo "$bsha" | cut -c1-16), rootfs $(echo "$rsha" | cut -c1-16)"
+say "bootfs $bsha ($bsize B), rootfs $rsha ($rsize B)"
 
-# --- everything stage 2 needs goes to RAM -------------------------------------
-rm -rf "$RAM"; mkdir -p "$RAM/lib"
-cp /bin/busybox "$RAM/busybox"
-cp "$UBIWRITE" "$RAM/ubiwrite"
-cp "$0" "$RAM/update.sh"
-cp "$BOOTFS" "$RAM/bootfs.itb"
-cp "$ROOTFS" "$RAM/rootfs.sq"
-# busybox in the image is dynamically linked (musl loader + libgcc_s), and the
-# kernel resolves the loader by the absolute path embedded in the binary, so
-# a copy of /lib (it is small) is bind-mounted over the real one. Seen on the
-# bench when only ld-musl was copied: "Error loading shared library
-# libgcc_s.so.1", and the box had to wait for the watchdog fuse.
-cp -a /lib/*.so* "$RAM/lib/" 2>/dev/null || true
-[ -e "$RAM/lib/libgcc_s.so.1" ] || die "no libgcc_s.so.1 under /lib — refusing to continue"
-ls "$RAM"/lib/ld-musl-*.so.1 >/dev/null 2>&1 || die "no musl loader under /lib — refusing to continue"
-for a in sh head cut sha256sum sync echo wc reboot sleep cat tr sed; do ln -sf busybox "$RAM/$a"; done
-chmod +x "$RAM/ubiwrite" "$RAM/busybox"
+if [ "$DRYRUN" = 1 ]; then
+	say "DRYRUN: would write $BVOL and $RVOL, commit slot $TGT and reboot"
+	exit 0
+fi
+
+# Detach: the write takes a couple of minutes and this board's dropbear drops
+# long sessions (verified on hardware - the first two runs lost their SSH
+# connection mid-update, and one of them stopped before the commit). Run the
+# real work in its own session so closing the terminal cannot abort an update
+# that is halfway through, and keep a log.
+if [ "$UPD66_DETACHED" != 1 ]; then
+	UPD66_DETACHED=1
+	export UPD66_DETACHED
+	LOG=${LOG:-/tmp/update-from-release.log}
+	setsid sh "$0" "$@" > "$LOG" 2>&1 &
+	say "update started in the background (log: $LOG)"
+	say "the board commits slot $TGT and reboots when it finishes"
+	exit 0
+fi
+
+[ -x "$UBIWRITE" ] || die "no ubiwrite at $UBIWRITE (copy it to /tmp and set UBIWRITE=)"
+[ -f "$META_DIR/meta-committed$TGT.bin" ] || \
+	die "no bootloader metadata blob at $META_DIR/meta-committed$TGT.bin"
+
+# ---------------------------------------------------------------------------
+# Write, verify, commit
+# ---------------------------------------------------------------------------
+say "writing $BVOL"
+"$UBIWRITE" "$BVOL" "$BOOTFS" || die "bootfs write failed"
+
+say "writing $RVOL (takes about a minute)"
+"$UBIWRITE" "$RVOL" "$ROOTFS" || die "rootfs write failed"
 sync
 
-say "stopping services (Wi-Fi drops now; the update takes about a minute, then the board reboots)"
-for s in podkop uhttpd rpcd dnsmasq cron log; do /etc/init.d/$s stop >/dev/null 2>&1 || true; done
-killall -q hostapd sing-box dnsmasq 2>/dev/null || true
-echo 900 > /proc/bcm96764_wdt_kick_secs 2>/dev/null || true
-mount -o bind "$RAM/lib" /lib || die "cannot bind-mount the RAM copy of /lib"
+# Reading a 24 MB volume back with `head -c` hangs on this SoC (verified: the
+# process ends up in D state), so the bootfs is hashed with a bounded dd and
+# the rootfs is verified by mounting the freshly written squashfs - which is
+# both faster and a stronger check, because it walks the whole metadata tree.
+b=$(dd if="$BVOL" bs=65536 count=$(( (bsize + 65535) / 65536 )) 2>/dev/null \
+	| head -c "$bsize" | sha256sum | cut -c1-64)
+[ "$b" = "$bsha" ] || die "bootfs readback mismatch ($b)"
+say "bootfs readback verified"
 
-# From here on nothing under / (squashfs) may be touched: exec the RAM copy.
-cd "$RAM"
-export PATH=$RAM
-UPD66_STAGE2=1 DRYRUN=$DRYRUN exec "$RAM/sh" "$RAM/update.sh" "$RAM/bootfs.itb" "$RAM/rootfs.sq" "$BVOL" "$RVOL" "$bsha" "$rsha"
+if [ "$TGT" = 2 ]; then UBIBLK=/dev/ubiblock0_6; else UBIBLK=/dev/ubiblock0_4; fi
+i=0; while [ ! -b "$UBIBLK" ] && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done
+[ -b "$UBIBLK" ] || die "no $UBIBLK (the kernel command line should expose both slots)"
+mkdir -p /tmp/upd66-mnt
+mount -t squashfs -o ro "$UBIBLK" /tmp/upd66-mnt 2>/dev/null || \
+	die "the rootfs just written to slot $TGT does not mount"
+v=$(sed -n 's/^version=//p' /tmp/upd66-mnt/etc/cudy-release 2>/dev/null)
+umount /tmp/upd66-mnt 2>/dev/null || true
+[ -n "$v" ] || die "the rootfs in slot $TGT has no /etc/cudy-release"
+say "rootfs mounts, reports version $v"
+
+say "committing slot $TGT"
+"$UBIWRITE" /dev/ubi0_1 "$META_DIR/meta-committed$TGT.bin" || die "metadata write failed"
+"$UBIWRITE" /dev/ubi0_2 "$META_DIR/meta-committed$TGT.bin" || die "metadata write failed"
+sync
+say "slot $TGT is now the committed boot slot; the slot we ran from stays as the fallback"
+
+if [ "$REBOOT" != no ]; then
+	say "rebooting"
+	echo 10 > /proc/bcm96764_wdt_kick_secs 2>/dev/null || true
+	reboot -f
+	sleep 120
+fi

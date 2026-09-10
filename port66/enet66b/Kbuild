@@ -7,7 +7,10 @@
 # exports sf2_mdio_read()/sf2_mdio_write(); then enet66b_mdio.ko is neither
 # built nor needed.
 
-ENET66B_STANDALONE_MDIO ?= 1
+# Default 0: port66/enet66 exports sf2_mdio_read()/sf2_mdio_write(), and two
+# modules exporting the same symbols cannot be loaded together. Set to 1 only
+# for a standalone enet66b build (review S2-12).
+ENET66B_STANDALONE_MDIO ?= 0
 
 obj-m += serdes6764.o
 obj-m += extsw6764.o

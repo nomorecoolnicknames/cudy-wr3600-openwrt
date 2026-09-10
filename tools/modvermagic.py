@@ -255,7 +255,7 @@ def fix_pv_table(buf):
 
 def default_vermagic():
     try:
-        data = open("/home/n8n/cudy_be3600/bsp-6.6/compat/bcm_shim.ko",
+        data = open(os.path.join(REPO, "bsp-6.6/compat/bcm_shim.ko"),
                     "rb").read()
         return read_vermagic(data).split("=", 1)[1].encode()
     except Exception:
@@ -1250,7 +1250,7 @@ def verify_cli(path):
 
 def selftest():
     """Apply both patches to a wl.ko copy; verify bytes/relocs/align/idem."""
-    src = "/home/n8n/cudy_be3600/radio/wl.ko"
+    src = os.path.join(REPO, "radio/wl.ko")
     fails = []
 
     def check(cond, msg):
@@ -1609,9 +1609,9 @@ def selftest_ksymtab():
         if not cond:
             fails.append(msg)
 
-    for src, want_n in (("/home/n8n/cudy_be3600/radio/hnd.ko", 853),
-                        ("/home/n8n/cudy_be3600/radio/wlshared.ko", 8),
-                        ("/home/n8n/cudy_be3600/radio/wl.ko", 2)):
+    for src, want_n in ((os.path.join(REPO, "radio/hnd.ko"), 853),
+                        (os.path.join(REPO, "radio/wlshared.ko"), 8),
+                        (os.path.join(REPO, "radio/wl.ko"), 2)):
         tag = src.split("/")[-1]
         orig = open(src, "rb").read()
         st = ksymtab_state(orig)

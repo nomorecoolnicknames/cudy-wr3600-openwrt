@@ -1,10 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * shim_nvram_seed.h — GENERATED, do not hand-edit.
- * Source: /home/n8n/cudy_be3600/triaging/shim/96764SV1.nvm (stock 96764SV1.nvm)
+ * Source: the unit's own flash, dumped as triaging/shim/96764SV1.nvm
  * Source sha256: a68e88aa9dd1caf24de078cecf93aa5afddde101372e84b58ed7bdddbba4a032
  * Keys: 462, getall bytes (excl. final NUL): 12781
- * Regenerate: tools/nvram_seed_gen.py (see its docstring).
+ * Regenerate from your own dump: tools/nvram_seed_gen.py (see its docstring).
+ * No license is claimed for this data: it is the calibration/board
+ * configuration read back from the device, kept here so the port can
+ * reproduce the vendor defaults.
  *
  * Layering at shim_nvram_init(): L1 (this table) first, then L3
  * module params et0macaddr/wl0_hwaddr/wl1_hwaddr overwrite

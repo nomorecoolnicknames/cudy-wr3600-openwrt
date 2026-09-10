@@ -489,7 +489,7 @@ out:
 
 static void sp_tx_reclaim(struct sysport6764 *sp)
 {
-	struct net_device *ndev = sp->tx_ndev;
+	struct net_device *ndev;
 	unsigned long flags;
 	bool done = false, stuck = false;
 	u32 v;
@@ -497,6 +497,11 @@ static void sp_tx_reclaim(struct sysport6764 *sp)
 	int i;
 
 	spin_lock_irqsave(&sp->tx_lock, flags);
+	/* tx_ndev is set when the netdev registers and read from the TX
+	 * completion path, so take it under the same lock that protects the
+	 * ring. Without this the first packet after link-up could dereference
+	 * a stale/NULL pointer (review S2-11). */
+	ndev = sp->tx_ndev;
 	if (sp->tx_busy) {
 		v = readl(sp->tdma + TDMA_DESC_RING_PC_INDEX(SP_TX_RING));
 		c_idx = (v >> 16) & 0xffff;

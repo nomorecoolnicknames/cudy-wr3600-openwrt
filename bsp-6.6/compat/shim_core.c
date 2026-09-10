@@ -176,11 +176,11 @@ EXPORT_SYMBOL(dev_queue_xmit);
 bool __list_add_valid(struct list_head *new, struct list_head *prev,
 		      struct list_head *next)
 {
-	/* 4.19 semantics: true if prev->next==next && next->prev==prev. */
-	if (prev->next != next || next->prev != prev)
-		return false;
-	__list_add(new, prev, next);
-	return true;
+	/* 4.19 semantics: a pure check - the caller inserts. FACT: wl.ko
+	 * imports this symbol (nm -u radio/wl.ko), so the previous version,
+	 * which called __list_add() here as well, inserted every node twice
+	 * and corrupted the vendor driver's lists (review S1-8). */
+	return prev->next == next && next->prev == prev;
 }
 EXPORT_SYMBOL(__list_add_valid);
 
@@ -191,9 +191,11 @@ bool __list_del_entry_valid(struct list_head *entry)
 
 	if (!prev || !next)
 		return false;
+	if (prev == LIST_POISON1 || next == LIST_POISON2)
+		return false;
 	if (prev->next != entry || next->prev != entry)
 		return false;
-	__list_del_entry(entry);
+	/* Same as above: validate only, the caller unlinks. */
 	return true;
 }
 EXPORT_SYMBOL(__list_del_entry_valid);

@@ -1121,6 +1121,10 @@ static netdev_tx_t netdev419_real_xmit(struct sk_buff *skb,
 	if (ret == NETDEV_TX_BUSY) {
 		if (shim_skb_free(old))
 			pr_warn("bcm_shim: busy TX legacy release refused\n");
+		/* Release the extra reference taken above: the stack keeps its
+		 * own and retries the same skb, but without this the +1 from
+		 * skb_get() leaked on every BUSY round (review S2-9). */
+		consume_skb(skb);
 		return NETDEV_TX_BUSY;
 	}
 	consume_skb(skb);

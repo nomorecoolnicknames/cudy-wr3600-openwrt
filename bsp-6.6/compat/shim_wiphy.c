@@ -135,6 +135,11 @@ extern char *wlcsm_nvram_k_get(char *name);
 #define WP419_SZ_TXRX			4
 #define WP419_NUM_BANDS			4
 #define WP419_NL80211_IFTYPE_MAX	12
+/* The 4.19 blob publishes NL80211_IFTYPE_MAX (=12) entries; the 6.6 kernel
+ * indexes mgmt_stypes[] with iftype values up to NL80211_IFTYPE_MAX, i.e. it
+ * needs NUM_NL80211_IFTYPES (=13) entries. If upstream ever makes the 4.19
+ * count larger than the 6.6 one, fail the build (review S2-10). */
+static_assert(WP419_NL80211_IFTYPE_MAX < NUM_NL80211_IFTYPES);
 /* Sanity caps for blob-owned counts (validate-first, never trust the
  * blob with an unbounded kcalloc): comfortably above the measured blob
  * values (bands 14/32/60 ch, 8/12 rates, 10 ciphers, 1 combination). */
@@ -656,11 +661,13 @@ static int wiphy419_publish_iftype(struct wiphy419_entry *entry,
 		memcpy(&types, s + WP419_O_IFTYPE_MASK, sizeof(types));
 		/* Mirror net/wireless/core.c wiphy_register: mask must be
 		 * nonzero and unique across entries; additionally refuse
-		 * bits beyond NL80211_IFTYPE_MAX (the 6.6 loop does not
-		 * range-check, but such bits would index out of the
-		 * nl80211 iftype tables on export). */
+		 * bits beyond the interface types 6.6 knows (the 6.6 loop
+		 * does not range-check, but such bits would index out of the
+		 * nl80211 iftype tables on export). NUM_NL80211_IFTYPES, not
+		 * NL80211_IFTYPE_MAX: the masks are bitmaps, so the valid
+		 * range is 0..NUM-1 (review S2-10). */
 		if (!types || (seen & types) ||
-		    (types & ~((1u << NL80211_IFTYPE_MAX) - 1))) {
+		    (types & ~((1u << NUM_NL80211_IFTYPES) - 1))) {
 			kfree(nd);
 			return -EOPNOTSUPP;
 		}
@@ -848,13 +855,18 @@ static int wiphy419_publish_stypes(struct wiphy419_entry *entry,
 		w->mgmt_stypes = NULL;
 		return 0;
 	}
-	/* One {tx,rx} mask pair per interface type; table shape is
-	 * identical (12 x 4 B both, asserted at init). No core-side
-	 * validation at register (runtime use only). */
-	entry->pub_stypes = kmemdup(p, WP419_NL80211_IFTYPE_MAX *
-				       sizeof(*entry->pub_stypes), GFP_KERNEL);
+	/* One {tx,rx} mask pair per interface type. The blob publishes
+	 * NL80211_IFTYPE_MAX (=12) entries, but 6.6 indexes the array with
+	 * iftype values up to NL80211_IFTYPE_MAX inclusive, so the copy has to
+	 * be NUM_NL80211_IFTYPES (=13) entries wide; the extra one stays zeroed
+	 * (review S2-10). No core-side validation at register (runtime use
+	 * only). */
+	entry->pub_stypes = kzalloc(NUM_NL80211_IFTYPES *
+				    sizeof(*entry->pub_stypes), GFP_KERNEL);
 	if (!entry->pub_stypes)
 		return -ENOMEM;
+	memcpy(entry->pub_stypes, p, WP419_NL80211_IFTYPE_MAX *
+				      sizeof(*entry->pub_stypes));
 	w->mgmt_stypes = entry->pub_stypes;
 	return 0;
 }

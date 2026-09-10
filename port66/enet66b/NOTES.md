@@ -351,10 +351,10 @@ forever (`sw_hw_ready`, the software-reset wait) the port bounds it at ~1 s.
 ## 9. Build
 
 ```
-make -C /home/n8n/cudy_be3600/kernel-6.6/src/linux-6.6.93 \
-     O=/home/n8n/cudy_be3600/kernel-6.6/build \
-     M=/home/n8n/cudy_be3600/port66/enet66b ARCH=arm \
-     CROSS_COMPILE=/home/n8n/cudy_be3600/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi- \
+make -C kernel-6.6/src/linux-6.6.93 \
+     O=kernel-6.6/build \
+     M=port66/enet66b ARCH=arm \
+     CROSS_COMPILE=gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi- \
      modules
 ```
 
@@ -366,7 +366,7 @@ Once `port66/enet66` exports `sf2_mdio_read()` / `sf2_mdio_write()`:
 
 ```
 make ENET66B_STANDALONE_MDIO=0 \
-     KBUILD_EXTRA_SYMBOLS=/home/n8n/cudy_be3600/port66/enet66/Module.symvers
+     KBUILD_EXTRA_SYMBOLS=port66/enet66/Module.symvers
 ```
 
 `enet66b_mdio.ko` is then neither built nor needed. Without the extra symbols

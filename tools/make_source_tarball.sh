@@ -69,8 +69,12 @@ cp "$R/FORUM_BUILD_GUIDE.md" "$W/docs/" 2>/dev/null || true
 say "verification"
 rc=0
 # real secrets (VPN subscription identifiers) must not appear anywhere
-personal='24955a25-14ad-49dd-87f0-3ae61a3449a1|4cd28b92-c1ed-4923-b151-e79e241e0492'
-bad=$(grep -rIl -E "$personal" "$W" 2>/dev/null \
+_bench_local="$(dirname "$0")/bench_secrets.local"
+[ -f "$_bench_local" ] && . "$_bench_local"
+personal="${BENCH_SECRETS:-}"
+pattern="/home/n8n|192\.168\.1\.(88|119|120)|gunwest"
+[ -n "$personal" ] && pattern="$pattern|$personal"
+bad=$(grep -rIl -E "$pattern" "$W" 2>/dev/null \
 	| grep -v 'tools/clean_release_rootfs.sh$' \
 	| grep -v 'tools/make_source_tarball.sh$' | head || true)
 [ -z "$bad" ] || { echo "personal data in package:"; echo "$bad"; rc=1; }

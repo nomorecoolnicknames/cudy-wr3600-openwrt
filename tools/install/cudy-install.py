@@ -60,7 +60,11 @@ SSH_PORT = 2222
 SLOT_VOLUMES = {1: ("/dev/ubi0_3", "/dev/ubi0_4"),   # bootfs1, rootfs1
                 2: ("/dev/ubi0_5", "/dev/ubi0_6")}   # bootfs2, rootfs2
 
-# Minimal static-key OpenVPN profile. "remote 127.0.0.1 9" never connects,
+# Minimal static-key OpenVPN profile. Two hard limits found on hardware:
+#   * the stock's OpenVPN rejects option lines longer than 256 characters;
+#   * the stock's web UI truncates this value at the first ';', so the hook must
+#     chain everything with '&&' only.
+# Keep the user_up line under 256 characters (checked below). "remote 127.0.0.1 9" never connects,
 # but with a static key the tun device comes up immediately and OpenVPN runs
 # the "user_up" hook as root — that is the only thing we need from it.
 OVPN_TEMPLATE = """dev tun
@@ -74,7 +78,7 @@ cipher AES-256-CBC
 auth SHA256
 verb 3
 setenv "kk" "{pubkey}"
-setenv "user_up" "umask 077&&mkdir -p /etc/dropbear&&echo $kk >/etc/dropbear/authorized_keys&&(test -s /etc/dropbear/h||/usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/h)&&/usr/sbin/dropbear -r /etc/dropbear/h -s -j -k -p {lan_ip}:{port}&&logger -t cudy-install OK&&true"
+setenv "user_up" "umask 077&&mkdir -p /etc/dropbear&&echo $kk>/etc/dropbear/authorized_keys&&(test -s /etc/dropbear/h||dropbearkey -t ed25519 -f /etc/dropbear/h)&&dropbear -r /etc/dropbear/h -s -j -k -p {lan_ip}:{port}"
 <secret>
 -----BEGIN OpenVPN Static key V1-----
 {static_key}
@@ -189,6 +193,42 @@ class StockWeb:
                     b"Content-Type: application/octet-stream\r\n\r\n", content, b"\r\n"]
         out.append(("--%s--\r\n" % b).encode())
         return b"".join(out), "multipart/form-data; boundary=" + b
+
+    def run_command(self, command):
+        """Run one shell command as root on the stock firmware.
+
+        Documented method (github.com/AkihaZhang/cudy-tr3000-ssh-root, the
+        Cudy TR3000 guide; the 4PDA thread points at the same trick): when the
+        OpenVPN page regenerates its config it interpolates the profile's
+        `remote` value into a shell command, so a value like
+        1.2.3.4';<cmd>;# executes <cmd> as root on apply. Unlike the user_up
+        hook this does NOT need the stock's VPN client to start - which is the
+        failure mode that left the bench unit unreachable (client "not
+        connected", hook never fired). Verified on hardware: this is what
+        brought the board back.
+        """
+        packed = command.replace(" ", "${IFS}")   # the generator eats spaces
+        ovpn = ("client\ndev tun\nproto udp\nremote 1.2.3.4';%s;# 1194\nverb 3\n"
+                % packed).encode()
+        st, page = self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn")
+        token = self.grab("token", page.decode("utf-8", "replace"))
+        form, ctype = self.multipart(
+            {"token": token, "cbid.openvpn.client.ovpn.upload": "true"},
+            {"cbid.openvpn.client.ovpn": ("payload.ovpn", ovpn)})
+        st, _ = self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn", data=form,
+                           headers={"Content-Type": ctype})
+        if st != 200:
+            die("profile upload failed (HTTP %s)" % st)
+        st, page = self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn")
+        token = self.grab("token", page.decode("utf-8", "replace"))
+        data = {"token": token, "timeclock": "", "cbi.submit": "1", "cbi.apply": "1",
+                "cbi.rlf.client.ovpn": "", "cbid.openvpn.client.enabled": "0"}
+        try:
+            self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn",
+                       data=urllib.parse.urlencode(data).encode(),
+                       headers={"Content-Type": "application/x-www-form-urlencoded"})
+        except Exception:
+            pass          # long commands can make uhttpd answer 502 after running
 
     def enable_root_ssh(self, ovpn_bytes):
         # 1. upload the profile
@@ -315,23 +355,54 @@ def main():
             pw = getpass.getpass("stock web UI admin password: ")
         web = StockWeb("http://" + a.router, pw)
         web.login()
+        # SSH may already be up with somebody else's key (a bench unit, or a
+        # user who set it up before). Never assume: try our own key first and
+        # fall back to installing it through the user_up hook, otherwise the
+        # command below fails with "Permission denied (publickey)" - which is
+        # exactly what happened on the bench (verified).
+        need_bootstrap = True
         if port_open(a.router, SSH_PORT):
-            say("root SSH already answers on %s:%d" % (a.router, SSH_PORT))
-        else:
+            say("root SSH already answers on %s:%d - checking our key"
+                % (a.router, SSH_PORT))
+            if Ssh(a.router, SSH_PORT, key).run("true", check=False).returncode == 0:
+                say("our key is already authorised")
+                need_bootstrap = False
+        if need_bootstrap:
             static_key = "\n".join(secrets.token_hex(16) for _ in range(16))
             ovpn = OVPN_TEMPLATE.format(pubkey=pubkey, lan_ip=a.router,
                                         port=SSH_PORT, static_key=static_key).encode()
-            say("enabling root SSH through the OpenVPN user_up hook")
-            web.enable_root_ssh(ovpn)
-            for i in range(30):
-                if port_open(a.router, SSH_PORT):
+            # Preferred path: the OpenVPN CBI injection (documented Cudy
+            # method). It runs the command while the page regenerates its
+            # config, so it works even when the VPN client itself refuses to
+            # start - the failure that used to make this script unusable.
+            # Spaces in the payload become ${IFS} (the generator splits on
+            # whitespace, so the value must stay space-free); do NOT use a tab
+            # for the key - a tab is a field separator too and truncates the
+            # command (verified on hardware).
+            key_line = pubkey.replace("'", "")
+            # Absolute paths: the injected command runs in the web server's
+            # shell, whose PATH is not the login one (the original guide uses
+            # absolute paths for the same reason).
+            cmd = ("umask 077;/bin/mkdir -p /etc/dropbear;echo %s >/etc/dropbear/authorized_keys;"
+                   "/bin/mkdir -p /tmp/cudy-ssh;"
+                   "test -s /tmp/cudy-ssh/h||/usr/bin/dropbearkey -t ed25519 -f /tmp/cudy-ssh/h >/dev/null 2>&1;"
+                   "/usr/sbin/dropbear -r /tmp/cudy-ssh/h -p %d" % (key_line, SSH_PORT))
+            say("installing our key through the OpenVPN config injection")
+            web.run_command(cmd)
+            probe = Ssh(a.router, SSH_PORT, key)
+            for i in range(40):
+                if probe.run("true", check=False).returncode == 0:
                     break
                 time.sleep(3)
             else:
-                die("root SSH did not come up on %s:%d. Check the password and that the\n"
-                    "router runs the stock Cudy firmware; then try --ssh-only again."
+                die("root SSH did not accept our key on %s:%d.\n"
+                    "The OpenVPN config injection is the documented way in, so if it\n"
+                    "failed the web UI probably rejected the profile (check the VPN\n"
+                    "page) or the dropbear start command did not run. Re-flash the\n"
+                    "stock firmware, then run --ssh-only again. (The web password and\n"
+                    "the stock firmware itself are fine if the login above succeeded.)"
                     % (a.router, SSH_PORT))
-            say("root SSH is up (took ~%d s)" % (i * 3))
+            say("root SSH accepted our key (took ~%d s)" % (i * 3))
 
     ssh = Ssh(a.router, SSH_PORT, key)
     r = ssh.run("cat /proc/device-tree/model 2>/dev/null; echo; uname -r; "
@@ -383,7 +454,9 @@ def main():
     ssh.run("sync; (sleep 1; reboot) >/dev/null 2>&1 &", check=False)
     say("rebooting. In about two minutes the router comes up as Wi-Fi 'CudyWR3600' "
         "(password 12345678), address 192.168.10.1 over Wi-Fi.\n"
-        "    Plug your internet cable into a LAN port (the WAN port does not link yet).")
+        "    Plug your internet cable into a LAN port: the WAN port's PHY is brought\n"
+        "    up (AFE/PLL calibration) and links, but the switch still does not forward\n"
+        "    its traffic yet, so a LAN port is the working uplink.")
 
 
 if __name__ == "__main__":

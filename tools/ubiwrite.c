@@ -37,6 +37,7 @@ int main(int argc, char **argv)
 	int fdin, fdout;
 	char *buf;
 	ssize_t n;
+	int64_t total;
 
 	if (argc != 3) {
 		fprintf(stderr, "usage: %s <volume-device> <file>\n", argv[0]);
@@ -76,6 +77,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "ubiwrite: out of memory\n");
 		return 1;
 	}
+	total = 0;
 	while ((n = read(fdin, buf, CHUNK)) > 0) {
 		ssize_t off = 0;
 
@@ -88,13 +90,32 @@ int main(int argc, char **argv)
 			}
 			off += w;
 		}
+		total += n;
 	}
 	if (n < 0) {
 		fprintf(stderr, "ubiwrite: read: %s\n", strerror(errno));
 		return 1;
 	}
-	close(fdout);
-	close(fdin);
+	if (total != bytes) {
+		fprintf(stderr, "ubiwrite: short write: %lld of %lld bytes\n",
+			(long long)total, (long long)bytes);
+		return 1;
+	}
+	/* The UBI volume-update ioctl completes on close(), so flush first and
+	 * only then report success - a full volume used to look like a pass
+	 * (review S2-13). */
+	if (fsync(fdout) && errno != EINVAL) {
+		fprintf(stderr, "ubiwrite: fsync: %s\n", strerror(errno));
+		return 1;
+	}
+	if (close(fdout)) {
+		fprintf(stderr, "ubiwrite: close: %s\n", strerror(errno));
+		return 1;
+	}
+	if (close(fdin)) {
+		fprintf(stderr, "ubiwrite: close input: %s\n", strerror(errno));
+		return 1;
+	}
 	printf("ubiwrite: %s <- %s (%lld bytes) ok\n", dev, path, (long long)bytes);
 	return 0;
 }

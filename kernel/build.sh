@@ -4,15 +4,17 @@
 # Usage: ./build.sh 2>&1 | tee out/build.log
 set -euo pipefail
 
-K66=/home/n8n/cudy_be3600/kernel-6.6
+# Everything is derived from this script's location; REPO_ROOT overrides it.
+K66="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$K66/.." && pwd)}"
 SRC=$K66/src/linux-6.6.93
 BB=$K66/src/busybox-1.36.1
 BUILD=$K66/build
 OUT=$K66/out
 INITRAMFS=$K66/initramfs
 # glibc cross-toolchain from the GPL build (READ-ONLY use, never modified)
-TC=/home/n8n/cudy_be3600/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi-
-STOCK_DTB=/home/n8n/cudy_be3600/stock/fit/fdt_96764SV1.dtb
+TC=$REPO_ROOT/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi-
+STOCK_DTB=$REPO_ROOT/stock/fit/fdt_96764SV1.dtb
 JOBS=$(nproc)
 
 export ARCH=arm

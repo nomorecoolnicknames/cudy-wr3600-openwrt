@@ -37,7 +37,13 @@ BUSYBOX=${BUSYBOX:-$R/kernel-6.6/build-bb/busybox}         # static busybox (ini
 # ---- outputs --------------------------------------------------------------
 REL=${REL:-$R/release}
 W=${W:-$R/.work/release}
+# VER is the version string that lands in /etc/cudy-release and in the source
+# package name; RELEASE_DATE drives every embedded timestamp and must stay a
+# plain date so the build is reproducible. A version like "2026-09-10.3" is
+# therefore fine as long as RELEASE_DATE (or VER itself, when it is a date) is
+# given too.
 VER=${VER:-$(date +%Y-%m-%d)}
+RELEASE_DATE=${RELEASE_DATE:-$(date -d "${VER%%.*}" +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)}
 
 # bootfs1 is a 28-LEB static UBI volume (LEB 126976); a FIT that fills it
 # completely does not boot, so stay at 27 LEB.
@@ -48,7 +54,7 @@ BOOTFS_MAX=$((27 * 126976))
 #   KBUILD_BUILD_*      -> the kernel's init/version-timestamp.o
 # The default is the release date (not the commit time) so that the artifacts
 # do not change when the commit that records their checksums is made.
-export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "$VER 00:00:00" +%s)}
+export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "$RELEASE_DATE 00:00:00" +%s)}
 export KBUILD_BUILD_TIMESTAMP=${KBUILD_BUILD_TIMESTAMP:-$(date -u -d "@$SOURCE_DATE_EPOCH" '+%Y-%m-%d %H:%M:%S')}
 export KBUILD_BUILD_USER=${KBUILD_BUILD_USER:-release}
 export KBUILD_BUILD_HOST=${KBUILD_BUILD_HOST:-cudy-wr3600}
@@ -214,6 +220,29 @@ file "$W/ubiwrite" | grep -q 'ARM' || die "ubiwrite is not an ARM binary"
 cp "$W/ubiwrite" "$W/rootfs/usr/bin/ubiwrite"
 chmod 0755 "$W/rootfs/usr/bin/ubiwrite"
 cp "$W/ubiwrite" "$REL/ubiwrite"
+# Bootloader slot metadata blobs (COMMITTED=1|2 + CRC32, exactly what
+# bcm_bootstate writes) and the in-place updater. The updater writes the OTHER
+# slot and needs the blob for it, so both live in the image; they are also
+# shipped next to the images for the manual path.
+mkdir -p "$W/rootfs/usr/share/cudy"
+python3 - "$W/rootfs/usr/share/cudy" "$REL" <<'PYEOF'
+import struct, sys, zlib
+out_dir, rel_dir = sys.argv[1], sys.argv[2]
+for committed in (1, 2):
+    blob = bytearray(1280)
+    data = ("COMMITTED=%d\0VALID=1,2\0SEQ=1,2\0\0" % committed).encode()
+    payload = data + b"\0" * (252 - len(data))
+    struct.pack_into('<III', blob, 0, 256, 256, zlib.crc32(payload) & 0xffffffff)
+    blob[12:12 + 252] = payload
+    for d in (out_dir, rel_dir):
+        with open("%s/meta-committed%d.bin" % (d, committed), "wb") as f:
+            f.write(bytes(blob))
+PYEOF
+for b in "$W/rootfs/usr/share/cudy"/meta-committed*.bin; do
+	need "$b"
+done
+cp "$R/tools/install/update-from-release.sh" "$W/rootfs/usr/bin/update-from-release.sh"
+chmod 0755 "$W/rootfs/usr/bin/update-from-release.sh"
 cp -a "$R/kernel-6.6/rootfs-overlay-forum/." "$W/rootfs/"
 # No git revision here on purpose: it would make the artifacts depend on the
 # commit that records them. The source package name identifies the sources.

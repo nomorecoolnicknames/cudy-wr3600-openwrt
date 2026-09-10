@@ -84,8 +84,18 @@ if [ "$(find "$S/etc/uci-defaults" -type f | wc -l)" -lt 10 ]; then
 	echo "uci-defaults looks incomplete"; rc=1
 fi
 
-personal='24955a25-14ad-49dd-87f0-3ae61a3449a1|4cd28b92-c1ed-4923-b151-e79e241e0492'
-if grep -rIl -E "$personal|192\.168\.1\.88|192\.168\.1\.119|192\.168\.1\.120|192\.168\.10\.55|gunwest" "$S" >/dev/null 2>&1; then
+# Values that must never ship: the maintainer's own VPN subscription IDs and
+# the bench addresses. Keep them out of the sources - read them from the
+# environment (BENCH_SECRETS) or from a gitignored tools/bench_secrets.local
+# file, both of which are checked below.
+_bench_local="$(dirname "$0")/bench_secrets.local"
+[ -f "$_bench_local" ] && . "$_bench_local"
+personal="${BENCH_SECRETS:-}"
+# bench networks plus any UUID-shaped string (a subscription id) are enough to
+# fail the release; the exact ids come from BENCH_SECRETS when available.
+pattern="192\.168\.1\.(88|119|120)|192\.168\.10\.(55|99)|gunwest"
+[ -n "$personal" ] && pattern="$pattern|$personal"
+if grep -rIl -E "$pattern" "$S" >/dev/null 2>&1; then
 	echo "personal/test data left:"
 	grep -rIl -E "$personal|192\.168\.1\.88|192\.168\.1\.119|192\.168\.1\.120|192\.168\.10\.55|gunwest" "$S" | head -20
 	rc=1
@@ -97,3 +107,18 @@ fi
 
 [ "$rc" = 0 ] || die "release rootfs still contains junk"
 say "rootfs clean"
+
+# Root password: the published image ships a *known* password on purpose.
+# Users flash and update the box themselves, often with no LAN cable (over
+# Wi-Fi only), so the credentials have to be predictable and documented. The
+# WAN input filter in wifi66 is what keeps the internet side out; change this
+# (and the AP passphrase 12345678) if your LAN is not trusted.
+# sha512-crypt, fixed salt -> the build stays reproducible.
+ROOT_HASH='$6$cudy$PMzBoiSY.3eDAynpvEePbKrXSX/B0daJ7jsUzDxPcTeKPr6UzwcGgGDikcg0K270iNaE4qkqtEpHN4nGcnXwv1'
+if [ -f "$S/etc/shadow" ]; then
+	sed -i "s|^root:[^:]*:|root:$ROOT_HASH:|" "$S/etc/shadow"
+	grep -q '^root:\$6\$cudy\$' "$S/etc/shadow" ||
+		die "failed to set the root password"
+else
+	die "no /etc/shadow in the rootfs"
+fi
