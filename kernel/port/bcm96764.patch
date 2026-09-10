@@ -1,0 +1,24 @@
+# BCM96764 minimal bring-up shim (Cudy WR3600, Linux 6.6).
+# Apply from the pristine tree root:  patch -p1 < port/bcm96764.patch
+# Revert:                             patch -p1 -R < port/bcm96764.patch
+# New files (port/bcm96764.c, port/bcm96764sv1-min.dts) are COPIED by
+# build.sh into arch/arm/mach-bcm/ and arch/arm/boot/dts/broadcom/.
+
+--- a/arch/arm/mach-bcm/Makefile
++++ b/arch/arm/mach-bcm/Makefile
+@@ -59,4 +59,6 @@ endif
+ # BCMBCA
+ ifeq ($(CONFIG_ARCH_BCMBCA),y)
+ obj-$(CONFIG_SMP)		+= bcm63xx_smp.o bcm63xx_pmb.o
++# BCM96764 (BCM6764) minimal bring-up: PSCI SMP, machine match only
++obj-y				+= bcm96764.o
+ endif
+--- a/arch/arm/boot/dts/broadcom/Makefile
++++ b/arch/arm/boot/dts/broadcom/Makefile
+@@ -44,6 +44,7 @@ dtb-$(CONFIG_ARCH_BCMBCA) += \
+ 	bcm963178.dtb \
+ 	bcm96756.dtb \
++	bcm96764sv1-min.dtb \
+ 	bcm96846.dtb \
+ 	bcm96855.dtb \
+ 	bcm96878.dtb

@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Kbuild for bcm_shim.ko — BCA 4.19 -> 6.6 ABI shim (SHIM_WORKPLAN lanes C-G).
+#
+# Lane ownership of the SOURCES (this Kbuild file itself is owned by the
+# integrator, lane H — lanes must not edit it, request changes instead):
+#   shim_core.c       lane C (kernel renames / signature adapters; owns
+#                     module_init/module_exit)
+#   cfg80211_compat.c lane D (cfg80211_ops 4.19->6.6 thunk table + 5 inline
+#                     forwarders; replaces shim_cfg80211.c at merge D)
+#   wl_compat.c       lane B+F (BCA datapath: blog/nbuff/gbpm/d3lut/emfc/
+#                     igsc/bcmFun/kmalloc/pktlist; replaces shim_bca.c)
+#   shim_hnd_gaps.c   lane E (hnd-specific gaps: vfs, DMA, BAR)
+#   shim_nvram.c      lane G (board MAC; nvram store is stock bcm_knvram.ko)
+#   shim_bcmlog.c     added during bring-up (bcm_printk / bcmLog_logIsEnabled
+#                     live in the vendor vmlinux, not in any .ko, so the
+#                     module-only symbol survey missed them)
+#   shim_pcie.c       lane E3 (M3-blockers: bcm_pcie_config/map_bar_addr
+#                     stubs with explicit u64 addr + bcm_shim_warn_slowpath_fmt
+#                     old-signature target of modvermagic --rename-warn;
+#                     see triaging/shim/SHIM_LANE_E3_REPORT.md)
+#
+# Merge-D removals (2026-09-07, see triaging/shim/SHIM_D_MERGE_SUMMARY.md):
+#   shim_bca.c      deleted — ~30 duplicate exports with wl_compat.c,
+#                   which is fuller (in-RAM d3lut/pktlist, emfc/igsc stubs,
+#                   functional dgasp registry).
+#   shim_cfg80211.c deleted — replaced by cfg80211_compat.c full thunk;
+#                   its 5 inline-forwarders transplanted into that file.
+#   bsp-66/compat/  deleted — duplicate tree, content moved here.
+#
+# bcm_compat.ko (bcm_compat.c, pre-existing) is a SEPARATE module kept for
+# 4.19 smoke builds; it is NOT part of the 6.6 wifi load path (its exports
+# are _GPL, unusable by the Proprietary wl.ko — see SHIM_C_SUMMARY.md).
+
+obj-m += bcm_shim.o
+
+bcm_shim-objs := shim_core.o cfg80211_compat.o wl_compat.o shim_hnd_gaps.o \
+		 shim_nvram.o shim_bcmlog.o shim_pcie.o shim_locks.o shim_alloc.o \
+		 shim_pci_driver.o shim_dma.o shim_netdev.o shim_skb.o shim_skb_fixture.o shim_skb_bridge_fixture.o \
+		 shim_wiphy.o shim_open_trace.o shim_cfg_events.o shim_skb_dispatch.o shim_genl_guard.o
+
+# NOTE (merge D): KBUILD_EXTRA_SYMBOLS intentionally NOT set here.
+# Pointing it at the kernel's own Module.symvers duplicates every
+# vmlinux export and modpost aborts with "'xas_*' exported twice"
+# (reproduced 2026-09-07, log in SHIM_D_MERGE_SUMMARY.md). modpost
+# already resolves in-kernel symbols via vmlinux; extra symvers files
+# (e.g. net/wireless/Module.symvers after the lane-B rebuild) are
+# passed via the Makefile/env KBUILD_EXTRA_SYMBOLS forwarding instead.
+
+# Keep the legacy compat module building alongside (4.19 smoke tests).
+obj-m += bcm_compat.o
+
+ccflags-y += -Wall
+
+# Reproducibility (SHIM_REPRO 2026-09-07): out-of-tree builds compile with
+# absolute M paths, which leak into the binary via __FILE__
+# (CONFIG_FORTIFY_SOURCE embeds "file:line" into .rodata.str1.4; the resulting
+# string shifts then move charp-param addends in .data/.rodata and the
+# build-id). Remap the source prefix to "." so identical sources build
+# byte-identical from any directory (mirrors what kbuild already does for
+# in-tree files via -fmacro-prefix-map=$(srctree)/=).
+ccflags-y += -ffile-prefix-map=$(src)=.

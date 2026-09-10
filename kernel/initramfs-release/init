@@ -1,0 +1,75 @@
+#!/bin/sh
+# Cudy WR3600 (BCM96764) preinit for the release bootfs.
+#
+# Brings up the on-SoC Ethernet, then switch_roots into the OpenWrt 24.10
+# squashfs in UBI volume rootfs1 (ubiblock0_4, read-only). Everything else
+# (Wi-Fi blobs, bridge, AP, DHCP, NAT) is started by /etc/init.d/wifi66 from
+# the rootfs.
+#
+# Release properties:
+#   - quiet console (printk=4), no netconsole, no debug IP addresses
+#   - enet6764 loads with its built-in defaults: single eth0 that covers every
+#     switch port, i.e. the wired ports act as WAN (documented limitation)
+#   - WDT fuse: if userspace does not kick the watchdog within 300 s the SoC
+#     resets and the bootloader falls back to slot 2 (stock firmware)
+#   - on rootfs failure the board is NOT rebooted through PSCI (that hangs
+#     this SoC); it waits for the watchdog fuse instead
+/bin/busybox devmem 0xff802628 32 0x20013434
+/bin/busybox --install -s /bin
+RR=0xff802628
+mark() { cur=$(devmem $RR 32) || return; devmem $RR 32 $(( (cur & 0x00ffffff) | ($1 << 24) )); }
+# The cpio carries no directory entries for the mount points: without them
+# every mount below fails, devtmpfs never shows /dev/ubiblock0_4 and the
+# rootfs can never be mounted.
+mkdir -p /proc /sys /dev /tmp /newroot
+echo 4 > /proc/sys/kernel/printk 2>/dev/null
+mark 0x21
+mount -t proc none /proc || echo "cudy66: proc mount failed" > /dev/kmsg
+mount -t sysfs none /sys || echo "cudy66: sysfs mount failed" > /dev/kmsg
+mount -t devtmpfs none /dev || echo "cudy66: devtmpfs mount failed" > /dev/kmsg
+mark 0x22
+for m in $(cat /modules.order 2>/dev/null); do
+	[ -f "/$m" ] || continue
+	insmod "/$m" $(cat "/$m.args" 2>/dev/null)
+done
+echo 300 > /proc/bcm96764_wdt_kick_secs 2>/dev/null
+ip link set eth0 up 2>/dev/null
+mark 0x23
+# Pick the rootfs of the slot we were booted from: U-Boot puts
+# root=/dev/ubiblock0_<4|6> into /chosen/bootargs of the device tree, so the
+# booted slot is known even though the kernel forces its own command line. The
+# rootfs is recognised by its /etc/cudy-release marker; a foreign squashfs
+# (e.g. the stock rootfs) has no marker and is only used if no release rootfs
+# exists at all.
+SLOT_ORDER="/dev/ubiblock0_4 /dev/ubiblock0_6"
+BOOTARGS=$(tr -d '\000' < /proc/device-tree/chosen/bootargs 2>/dev/null)
+case "$BOOTARGS" in
+*ubiblock0_6*) SLOT_ORDER="/dev/ubiblock0_6 /dev/ubiblock0_4" ;;
+esac
+FOUND=
+FALLBACK=
+for d in $SLOT_ORDER; do
+	i=0; while [ ! -b "$d" ] && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+	[ -b "$d" ] || continue
+	mount -t squashfs -o ro "$d" /newroot 2>/dev/null || continue
+	if [ -f /newroot/etc/cudy-release ]; then
+		FOUND=$d
+		break
+	fi
+	[ -n "$FALLBACK" ] || FALLBACK=$d
+	umount /newroot
+done
+if [ -z "$FOUND" ] && [ -n "$FALLBACK" ]; then
+	mount -t squashfs -o ro "$FALLBACK" /newroot 2>/dev/null && FOUND=$FALLBACK
+fi
+if [ -n "$FOUND" ]; then
+	mark 0x24
+	mount --move /dev /newroot/dev
+	umount /sys
+	umount /proc
+	mark 0x25
+	exec switch_root /newroot /sbin/init
+fi
+mark 0x2F
+echo "cudy66: no rootfs mounted, waiting for the watchdog fuse" > /dev/kmsg 2>/dev/null
+while true; do sleep 60; done

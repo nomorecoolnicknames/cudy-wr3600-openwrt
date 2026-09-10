@@ -1,0 +1,62 @@
+config system
+	option hostname 'CudyWR3600'
+	option timezone 'UTC'
+	option cronloglevel '8'
+
+# Panel LEDs, driven by port66/leds66/leds-bca-cled.ko (brcm,bca-cleds-ctrl,v2).
+# Names come from the stock DT labels. All six are wired:
+#   status   - heartbeat, "the box is alive"
+#   wan      - activity on the wired uplink (eth0)
+#   internet - activity on the wired uplink (eth0)
+#   lan      - traffic on the Wi-Fi bridge (the wired ports belong to eth0, so
+#              there is no separate wired LAN in the split=0 configuration)
+#   wifi     - 2.4 GHz radio (wl1) activity
+#   wifi5g   - 5 GHz radio (wl0) activity
+# NOTE: in split=0 eth0 is the only wired netdev and it is attached to the
+# external 53134 switch (SF2 port 5), i.e. the uplink cable has to be in a LAN
+# port. The physical WAN port (SF2 port 0, internal GPHY) does not link yet, so
+# a WAN LED driven by "link" would lie: it stays lit through the internal
+# switch trunk even with no cable anywhere. Both wired LEDs therefore show
+# traffic, not link.
+# The vendor wl.ko blob registers no mac80211 LED triggers, so the radios use
+# the generic netdev trigger on wl0/wl1.
+
+config led 'led_status'
+	option name 'status'
+	option sysfs 'oem:green:status'
+	option trigger 'heartbeat'
+
+config led 'led_wan'
+	option name 'wan'
+	option sysfs 'oem:green:wan'
+	option trigger 'netdev'
+	option dev 'eth0'
+	option mode 'tx rx'
+
+config led 'led_internet'
+	option name 'internet'
+	option sysfs 'oem:green:internet'
+	option trigger 'netdev'
+	option dev 'eth0'
+	option mode 'tx rx'
+
+config led 'led_lan'
+	option name 'lan'
+	option sysfs 'oem:green:lan'
+	option trigger 'netdev'
+	option dev 'br-lan'
+	option mode 'tx rx'
+
+config led 'led_wifi'
+	option name 'wifi'
+	option sysfs 'oem:green:wifi'
+	option trigger 'netdev'
+	option dev 'wl1'
+	option mode 'link tx rx'
+
+config led 'led_wifi5g'
+	option name 'wifi5g'
+	option sysfs 'oem:green:wifi5g'
+	option trigger 'netdev'
+	option dev 'wl0'
+	option mode 'link tx rx'

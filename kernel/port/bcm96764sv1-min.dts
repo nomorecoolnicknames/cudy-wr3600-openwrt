@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Minimal BCM6764 / BCM96764 device tree for Linux 6.6 bring-up
+ * (Cudy WR3600 V1, "96764SV1").
+ *
+ * Derived from the STOCK dtb (stock/fit/fdt_96764SV1.dtb, decompiled) and
+ * from upstream arch/arm/boot/dts/broadcom/bcm6756.dtsi (same BCA A7 family):
+ *  - physical addresses are taken from the STOCK dtb:
+ *      GIC  dist 0x81001000 / cpu 0x81002000 (root level, 1:1)
+ *      UART PL011 ubus 0x12000 -> phys 0x80012000 (ubus ranges
+ *        <0 0x80000000 0x70000000>), SPI 32, 50 MHz uartclk
+ *      memory@0 = 128 MB (as the stock dtb reports; the 512 MB DDR3
+ *        config from 6764.dtsi memcfg is applied by the bootloader,
+ *        which may fix up /memory at boot)
+ *      timer PPI 13/14/11/10, PMU SPI 7..10, PSCI 0.2/smc
+ *  - everything with a "brcm,*" proprietary compatible (enet/switch_sf2,
+ *    pcie, nand/spi-nand, usb, memc, pinctrl, clocks beyond fixed) is
+ *    DELIBERATELY OMITTED: no upstream 6.6 driver binds to them, and the
+ *    kernel simply ignores unknown nodes. That is exactly the boundary of
+ *    what boots without the BCA BSP (see README/blockers).
+ *
+ * Boot: u-boot FIT (kernel lzma load/entry 0x108000 + this dtb), same
+ * layout as stock brcm_fit_linux.its. Console on PL011 uart0 = ttyAMA0.
+ */
+
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/dts-v1/;
+
+/memreserve/ 0x00000000 0x00108000;
+
+/ {
+	model = "Broadcom BCM96764/R77 (6.6 minimal bring-up)";
+	compatible = "brcm,bcm96764", "brcm,bcmbca";
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	interrupt-parent = <&gic>;
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		bootargs = "coherent_pool=4M cpuidle_sysfs_switch pci=pcie_bus_safe isolcpus=3 console=ttyAMA0,115200 earlycon rootwait rng_core.default_quality=1024";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x08000000>; /* 128 MB, mirrors stock dtb */
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x0>;
+			next-level-cache = <&l2_0>;
+			enable-method = "psci";
+		};
+
+		cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x1>;
+			next-level-cache = <&l2_0>;
+			enable-method = "psci";
+		};
+
+		cpu@2 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x2>;
+			next-level-cache = <&l2_0>;
+			enable-method = "psci";
+		};
+
+		cpu@3 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x3>;
+			next-level-cache = <&l2_0>;
+			enable-method = "psci";
+		};
+
+		l2_0: l2-cache0 {
+			compatible = "cache";
+			cache-level = <2>;
+			cache-unified;
+		};
+	};
+
+	timer {
+		compatible = "arm,armv7-timer";
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			<GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			<GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			<GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>;
+		arm,cpu-registers-not-fw-configured;
+	};
+
+	pmu {
+		compatible = "arm,cortex-a7-pmu";
+		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH>,
+			<GIC_SPI 8 IRQ_TYPE_LEVEL_HIGH>,
+			<GIC_SPI 9 IRQ_TYPE_LEVEL_HIGH>,
+			<GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	psci {
+		compatible = "arm,psci-0.2";
+		method = "smc";
+		cpu_off = <1>;
+		cpu_on = <2>;
+	};
+
+	clocks {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		periph_clk: periph-clk {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <200000000>; /* PERIPH_CLK, 6764.dtsi */
+		};
+
+		uart_clk: uart-clk {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <50000000>; /* refclk50mhz, stock dtb */
+		};
+	};
+
+	/* GIC: phys 0x81001000/0x81002000, 1:1 (as in stock dtb) */
+	axi@81000000 {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0 0x81000000 0x8000>;
+
+		gic: interrupt-controller@1000 {
+			compatible = "arm,cortex-a7-gic";
+			#interrupt-cells = <3>;
+			interrupt-controller;
+			interrupts = <GIC_PPI 9 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>;
+			reg = <0x1000 0x1000>,
+				<0x2000 0x2000>;
+		};
+	};
+
+	/* UBUS peripherals: ubus 0 -> phys 0x80000000 (stock dtb ranges) */
+	ubus-bus {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x80000000 0x70000000>;
+
+		uart0: serial@12000 {
+			compatible = "arm,pl011", "arm,primecell";
+			reg = <0x12000 0x1000>; /* phys 0x80012000 */
+			interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&uart_clk>, <&uart_clk>;
+			clock-names = "uartclk", "apb_pclk";
+			status = "okay";
+		};
+	};
+};

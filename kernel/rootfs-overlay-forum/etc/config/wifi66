@@ -1,0 +1,8 @@
+
+config wifi66 'settings'
+	# admin (SSH 22, LuCI 80/443) from the wired/WAN side:
+	#   private  only when the request comes from a private (RFC1918) address,
+	#            i.e. the box sits behind another router at home  (default)
+	#   1        always (do NOT do this on a public uplink)
+	#   0        never; LAN (Wi-Fi) only
+	option wan_admin 'private'

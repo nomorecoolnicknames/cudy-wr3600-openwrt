@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""
+cudy-install.py — install the Linux 6.6 / OpenWrt 24.10 firmware on a
+Cudy WR3600 (BCM6764) from your computer, over the network, without UART,
+TFTP recovery or the bootloader.
+
+What it does, step by step:
+
+  1. logs into the stock web interface (you give it the admin password);
+  2. turns on root SSH on the stock firmware. The stock firmware has no SSH
+     switch, but its OpenVPN client runs a "user_up" script as root when a
+     tunnel comes up. The script uploads a throw-away OpenVPN profile whose
+     user_up installs a fresh SSH key and starts dropbear on port 2222.
+     Nothing is flashed at this point and the profile is removed again by
+     the reboot at the end;
+  3. copies bootfs-release.itb and rootfs-forum.sq to the router;
+  4. writes them into slot 1 (UBI volumes bootfs1 / rootfs1) with the stock
+     ubiupdatevol and verifies the readback checksum;
+  5. makes slot 1 the boot slot (bcm_bootstate +1) and reboots.
+
+Slot 2 (the factory firmware), the bootloader (loader, u-boot) and the board
+data (bdinfo) are never written. Rollback: from the stock system
+"bcm_bootstate +2 && reboot", or wait for the watchdog fuse, see docs.
+
+Requirements on your computer: Python 3.8+, OpenSSH client (ssh, scp,
+ssh-keygen). Linux, macOS and Windows (with OpenSSH installed) work.
+
+Usage:
+    python3 cudy-install.py --router 192.168.10.1 --password 'WebUiPassword' \\
+        bootfs-release.itb rootfs-forum.sq
+
+    python3 cudy-install.py --router 192.168.10.1 --password ... --ssh-only
+        (only turn on root SSH, then stop; e.g. to look around first)
+
+    python3 cudy-install.py ... --slot 2
+        (write slot 2 instead — only if you know why)
+
+    python3 cudy-install.py ... --no-commit
+        (boot the new firmware ONCE for a trial; the next reboot returns to
+        the factory slot. Use this for the very first try.)
+"""
+import argparse
+import hashlib
+import http.cookiejar
+import os
+import re
+import secrets
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+UA = "cudy-install/1.0"
+SSH_PORT = 2222
+SLOT_VOLUMES = {1: ("/dev/ubi0_3", "/dev/ubi0_4"),   # bootfs1, rootfs1
+                2: ("/dev/ubi0_5", "/dev/ubi0_6")}   # bootfs2, rootfs2
+
+# Minimal static-key OpenVPN profile. "remote 127.0.0.1 9" never connects,
+# but with a static key the tun device comes up immediately and OpenVPN runs
+# the "user_up" hook as root — that is the only thing we need from it.
+OVPN_TEMPLATE = """dev tun
+proto udp
+remote 127.0.0.1 9
+ifconfig 10.254.246.1 10.254.246.2
+nobind
+persist-key
+persist-tun
+cipher AES-256-CBC
+auth SHA256
+verb 3
+setenv "kk" "{pubkey}"
+setenv "user_up" "umask 077&&mkdir -p /etc/dropbear&&echo $kk >/etc/dropbear/authorized_keys&&(test -s /etc/dropbear/h||/usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/h)&&/usr/sbin/dropbear -r /etc/dropbear/h -s -j -k -p {lan_ip}:{port}&&logger -t cudy-install OK&&true"
+<secret>
+-----BEGIN OpenVPN Static key V1-----
+{static_key}
+-----END OpenVPN Static key V1-----
+</secret>
+"""
+
+
+def say(msg):
+    print("==> " + msg, flush=True)
+
+
+def die(msg, code=1):
+    print("ERROR: " + msg, file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def port_open(host, port, timeout=3):
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+# --------------------------------------------------------------------------
+# stock web interface (LuCI-based, custom login hashing)
+# --------------------------------------------------------------------------
+class StockWeb:
+    def __init__(self, base, password):
+        self.base = base.rstrip("/")
+        self.password = password
+        self.jar = http.cookiejar.CookieJar()
+        self.op = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.jar))
+
+    def fetch(self, path, data=None, headers=None, timeout=40):
+        h = {"User-Agent": UA, "Referer": self.base + "/cgi-bin/luci/"}
+        if headers:
+            h.update(headers)
+        req = urllib.request.Request(self.base + path, data=data, headers=h)
+        try:
+            with self.op.open(req, timeout=timeout) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+        except (urllib.error.URLError, socket.timeout) as e:
+            # the "apply" requests can time out while the router reconfigures
+            return 0, str(e).encode()
+
+    @staticmethod
+    def grab(name, body):
+        m = re.search(r'name="%s"[^>]*value="([^"]*)"' % re.escape(name), body)
+        return m.group(1) if m else ""
+
+    def login(self):
+        st, html = self.fetch("/cgi-bin/luci/")
+        if st == 0:
+            die("web interface at %s is not reachable" % self.base)
+        html = html.decode("utf-8", "replace")
+        if "Create an administrator password" in html:
+            die("the router is in the first-run wizard: open %s in a browser, "
+                "set an admin password, then run this again" % self.base)
+        csrf = self.grab("_csrf", html)
+        salt = self.grab("salt", html)
+        token = self.grab("token", html)
+        if not salt:
+            die("no login form found — is %s the stock web interface?" % self.base)
+        h = hashlib.sha256((self.password + salt).encode()).hexdigest()
+        h2 = hashlib.sha256((h + token).encode()).hexdigest()
+        data = urllib.parse.urlencode({
+            "_csrf": csrf, "salt": salt, "token": token,
+            "zonename": "UTC", "timeclock": str(int(time.time())),
+            "luci_username": "admin", "luci_password": h2,
+        }).encode()
+        st, body = self.fetch("/cgi-bin/luci/admin/wizard", data=data,
+                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+        b = body.decode("utf-8", "replace")
+        if "luci_password" in b and st != 302:
+            die("web login failed — wrong password?")
+        if not any(c.name == "sysauth" or "sysauth" in c.name for c in self.jar):
+            # some builds only set the cookie on the redirect; do a sanity GET
+            st, body = self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn")
+            if b"luci_password" in body:
+                die("web login failed — wrong password?")
+        say("web login ok")
+
+    @staticmethod
+    def multipart(fields, files):
+        b = "----CudyInstall" + secrets.token_hex(8)
+        out = []
+        for k, v in fields.items():
+            out += [("--%s\r\n" % b).encode(),
+                    ('Content-Disposition: form-data; name="%s"\r\n\r\n' % k).encode(),
+                    str(v).encode() + b"\r\n"]
+        for k, (fn, content) in files.items():
+            out += [("--%s\r\n" % b).encode(),
+                    ('Content-Disposition: form-data; name="%s"; filename="%s"\r\n'
+                     % (k, fn)).encode(),
+                    b"Content-Type: application/octet-stream\r\n\r\n", content, b"\r\n"]
+        out.append(("--%s--\r\n" % b).encode())
+        return b"".join(out), "multipart/form-data; boundary=" + b
+
+    def enable_root_ssh(self, ovpn_bytes):
+        # 1. upload the profile
+        st, page = self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn")
+        token = self.grab("token", page.decode("utf-8", "replace"))
+        form, ctype = self.multipart(
+            {"token": token, "timeclock": str(int(time.time())), "cbi.submit": "1",
+             "cbid.openvpn.client.ovpn.upload": "true"},
+            {"cbid.openvpn.client.ovpn": ("cudy-install.ovpn", ovpn_bytes)})
+        st, _ = self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn", data=form,
+                           headers={"Content-Type": ctype})
+        if st not in (200, 302):
+            die("profile upload failed (HTTP %s)" % st)
+        # 2. enable the VPN client
+        st, cfg = self.fetch("/cgi-bin/luci/admin/network/vpn/config?nomodal=")
+        token = self.grab("token", cfg.decode("utf-8", "replace"))
+        fields = {
+            "token": token, "timeclock": str(int(time.time())), "cbi.submit": "1",
+            "cbi.apply": "1", "cbi.cbe.vpn.config.enabled": "1",
+            "cbid.vpn.config.enabled": "1", "cbid.vpn.config._proto": "openvpn",
+            "cbid.vpn.config.policy": "none", "cbid.vpn.config.filter": "allow",
+            "cbid.vpn.config.access": "lanwan", "cbid.vpn.config.s2s": "0",
+            "cbid.vpn.config.subnet": "", "cbid.vpn.config.domain": "",
+            "cbid.vpn.config._dns1": "", "cbid.vpn.config._dns2": "",
+        }
+        st, resp = self.fetch("/cgi-bin/luci/admin/network/vpn/config?nomodal=",
+                              data=urllib.parse.urlencode(fields).encode(),
+                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+        # 3. (re)start the service — without this the profile is saved but the
+        #    tunnel, and therefore user_up, never runs
+        m = re.search(r"servicectl/restart/([^'\"]+)", resp.decode("utf-8", "replace"))
+        svc = m.group(1) if m else "openvpn,firewall"
+        self.fetch("/cgi-bin/luci/admin/servicectl/restart/" + svc,
+                   data=urllib.parse.urlencode({"token": token}).encode(),
+                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+
+
+# --------------------------------------------------------------------------
+# ssh helpers
+# --------------------------------------------------------------------------
+class Ssh:
+    def __init__(self, host, port, key):
+        self.host, self.port, self.key = host, port, key
+        self.base = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=" + os.devnull,
+                     "-o", "ConnectTimeout=8", "-i", key]
+
+    def run(self, cmd, check=True, timeout=600):
+        r = subprocess.run(["ssh"] + self.base + ["-p", str(self.port),
+                           "root@" + self.host, cmd],
+                           capture_output=True, text=True, timeout=timeout)
+        if check and r.returncode != 0:
+            die("ssh command failed (%d): %s\n%s" % (r.returncode, cmd, r.stderr.strip()))
+        return r
+
+    def scp(self, local, remote):
+        # -O: the router's dropbear only speaks the legacy scp protocol
+        r = subprocess.run(["scp", "-O"] + self.base + ["-P", str(self.port),
+                           local, "root@%s:%s" % (self.host, remote)],
+                           capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            die("scp failed: %s" % r.stderr.strip())
+
+
+def which_or_die(prog):
+    from shutil import which
+    if not which(prog):
+        die("'%s' not found — install the OpenSSH client" % prog)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog=__doc__)
+    ap.add_argument("bootfs", nargs="?", help="bootfs-release.itb")
+    ap.add_argument("rootfs", nargs="?", help="rootfs-forum.sq")
+    ap.add_argument("--router", default="192.168.10.1", help="stock LAN address (default 192.168.10.1)")
+    ap.add_argument("--password", help="stock web UI admin password (asked if omitted)")
+    ap.add_argument("--slot", type=int, choices=(1, 2), default=1, help="slot to write (default 1)")
+    ap.add_argument("--no-commit", action="store_true",
+                    help="boot the new slot once (trial); next reboot returns to the other slot")
+    ap.add_argument("--ssh-only", action="store_true", help="only enable root SSH and exit")
+    ap.add_argument("--key", help="use this private key instead of generating one")
+    ap.add_argument("--skip-ssh-setup", action="store_true",
+                    help="root SSH on port 2222 is already up (with --key)")
+    a = ap.parse_args()
+
+    for p in ("ssh", "scp", "ssh-keygen"):
+        which_or_die(p)
+
+    if not a.ssh_only:
+        if not a.bootfs or not a.rootfs:
+            ap.error("bootfs and rootfs files are required (or use --ssh-only)")
+        for p in (a.bootfs, a.rootfs):
+            if not os.path.isfile(p):
+                die("no such file: " + p)
+        boot_sha, root_sha = sha256_file(a.bootfs), sha256_file(a.rootfs)
+        say("bootfs %s  sha256 %s" % (os.path.basename(a.bootfs), boot_sha[:16]))
+        say("rootfs %s  sha256 %s" % (os.path.basename(a.rootfs), root_sha[:16]))
+        boot_size = os.path.getsize(a.bootfs)
+        if boot_size > 27 * 126976:
+            die("bootfs is %d bytes; anything over 27 LEB (%d) does not boot on this board"
+                % (boot_size, 27 * 126976))
+
+    # ---- keys -----------------------------------------------------------
+    if a.key:
+        key = a.key
+    else:
+        kdir = os.path.join(os.path.expanduser("~"), ".cudy-install")
+        os.makedirs(kdir, mode=0o700, exist_ok=True)
+        key = os.path.join(kdir, "id_ed25519")
+        if not os.path.exists(key):
+            subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
+                            "-C", "cudy-install", "-f", key], check=True)
+            say("generated SSH key " + key)
+    with open(key + ".pub") as f:
+        pubkey = f.read().strip()
+
+    # ---- 1+2: web login, root ssh -----------------------------------------
+    if not a.skip_ssh_setup:
+        pw = a.password
+        if pw is None:
+            import getpass
+            pw = getpass.getpass("stock web UI admin password: ")
+        web = StockWeb("http://" + a.router, pw)
+        web.login()
+        if port_open(a.router, SSH_PORT):
+            say("root SSH already answers on %s:%d" % (a.router, SSH_PORT))
+        else:
+            static_key = "\n".join(secrets.token_hex(16) for _ in range(16))
+            ovpn = OVPN_TEMPLATE.format(pubkey=pubkey, lan_ip=a.router,
+                                        port=SSH_PORT, static_key=static_key).encode()
+            say("enabling root SSH through the OpenVPN user_up hook")
+            web.enable_root_ssh(ovpn)
+            for i in range(30):
+                if port_open(a.router, SSH_PORT):
+                    break
+                time.sleep(3)
+            else:
+                die("root SSH did not come up on %s:%d. Check the password and that the\n"
+                    "router runs the stock Cudy firmware; then try --ssh-only again."
+                    % (a.router, SSH_PORT))
+            say("root SSH is up (took ~%d s)" % (i * 3))
+
+    ssh = Ssh(a.router, SSH_PORT, key)
+    r = ssh.run("cat /proc/device-tree/model 2>/dev/null; echo; uname -r; "
+                "which ubiupdatevol bcm_bootstate; bcm_bootstate 2>&1 | grep -m1 committed",
+                check=False)
+    out = r.stdout.strip()
+    if r.returncode != 0 or "ubiupdatevol" not in out:
+        die("cannot run commands over SSH, or ubiupdatevol is missing:\n" + out + "\n" + r.stderr)
+    say("router: " + " | ".join(l for l in out.splitlines() if l))
+    if "BCM96764" not in out and "6764" not in out:
+        die("this does not look like a BCM6764 board (model: %s)" % out.splitlines()[0])
+    if a.ssh_only:
+        say("done. Connect with: ssh -p %d -i %s root@%s" % (SSH_PORT, key, a.router))
+        return
+
+    # ---- 3: copy ----------------------------------------------------------
+    say("copying images to /tmp on the router (rootfs is ~24 MB, be patient)")
+    ssh.scp(a.bootfs, "/tmp/bootfs.itb")
+    ssh.scp(a.rootfs, "/tmp/rootfs.sq")
+    r = ssh.run("sha256sum /tmp/bootfs.itb /tmp/rootfs.sq")
+    got = dict((l.split()[1], l.split()[0]) for l in r.stdout.splitlines() if l.strip())
+    if got.get("/tmp/bootfs.itb") != boot_sha or got.get("/tmp/rootfs.sq") != root_sha:
+        die("checksum mismatch after copy:\n" + r.stdout)
+    say("copied, checksums match")
+
+    # ---- 4: write the slot -------------------------------------------------
+    bvol, rvol = SLOT_VOLUMES[a.slot]
+    say("writing slot %d: %s <- bootfs, %s <- rootfs" % (a.slot, bvol, rvol))
+    ssh.run("ubiupdatevol %s /tmp/bootfs.itb && ubiupdatevol %s /tmp/rootfs.sq && sync"
+            % (bvol, rvol), timeout=900)
+    r = ssh.run("head -c %d %s | sha256sum; head -c %d %s | sha256sum"
+                % (boot_size, bvol, os.path.getsize(a.rootfs), rvol), timeout=900)
+    back = [l.split()[0] for l in r.stdout.splitlines() if l.strip()]
+    if back != [boot_sha, root_sha]:
+        die("readback checksum mismatch — NOT switching the boot slot:\n" + r.stdout)
+    say("written and verified")
+
+    # ---- 5: boot slot ------------------------------------------------------
+    if a.no_commit:
+        # ACTIVATE: the next reset boots the non-committed slot exactly once
+        ssh.run("bcm_bootstate +%d >/dev/null 2>&1; echo 1 > /proc/bootstate/reset_reason" % a.slot,
+                check=False)
+        say("slot %d will boot ONCE; the following reboot returns to the committed slot" % a.slot)
+    else:
+        ssh.run("bcm_bootstate +%d" % a.slot)
+        say("slot %d committed as the boot slot" % a.slot)
+    r = ssh.run("bcm_bootstate 2>&1 | grep -m1 committed", check=False)
+    say("bootstate: " + r.stdout.strip())
+    ssh.run("sync; (sleep 1; reboot) >/dev/null 2>&1 &", check=False)
+    say("rebooting. In about two minutes the router comes up as Wi-Fi 'CudyWR3600' "
+        "(password 12345678), address 192.168.10.1 over Wi-Fi.\n"
+        "    Plug your internet cable into a LAN port (the WAN port does not link yet).")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        die("interrupted", 130)

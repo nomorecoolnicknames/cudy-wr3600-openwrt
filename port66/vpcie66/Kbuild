@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0
+obj-m += wlprobe66.o
+obj-m += vpcie66.o
+
+ccflags-y += -Wall
+
+ccflags-y += -I$(srctree)/drivers/bcma

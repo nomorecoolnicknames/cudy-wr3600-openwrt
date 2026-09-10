@@ -1,0 +1,6 @@
+This repository is licensed under the GNU General Public License, version 2
+only (GPL-2.0-only). See https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+The Broadcom Wi-Fi driver binaries used by the release images (wl.ko, hnd.ko,
+wlshared.ko) are proprietary, are not part of this repository, and are taken
+from the factory firmware of the device itself.

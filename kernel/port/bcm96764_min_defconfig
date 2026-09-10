@@ -1,0 +1,72 @@
+# Minimal Linux 6.6 defconfig for BCM6764/BCM96764 bring-up (Cudy WR3600).
+# Goal: decompress -> PL011 serial console -> built-in initramfs shell.
+# Upstream-only drivers. No NET/WLAN/USB/MMC/BCA BSP on purpose (see blockers).
+CONFIG_ARCH_MULTIPLATFORM=y
+CONFIG_ARCH_MULTI_V7=y
+CONFIG_ARCH_BCM=y
+CONFIG_ARCH_BCMBCA=y
+CONFIG_ARCH_BCMBCA_CORTEXA7=y
+CONFIG_SMP=y
+CONFIG_NR_CPUS=4
+CONFIG_AEABI=y
+CONFIG_HIGHMEM=n
+CONFIG_ARM_LPAE=n
+CONFIG_VFP=y
+CONFIG_VFPv3=y
+CONFIG_NEON=y
+CONFIG_KERNEL_MODE_NEON=y
+CONFIG_ARM_APPENDED_DTB=n
+CONFIG_ARM_ATAG_DTB_COMPAT=y
+CONFIG_CMDLINE=""
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+# Serial console (PL011 uart0 -> ttyAMA0), OF earlycon via stdout-path
+CONFIG_TTY=y
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+CONFIG_SERIAL_EARLYCON=y
+CONFIG_SERIAL_CORE=y
+CONFIG_SERIAL_CORE_CONSOLE=y
+# Timer / irq / SMP
+CONFIG_ARM_ARCH_TIMER=y
+CONFIG_ARM_GIC=y
+CONFIG_ARM_PSCI=y
+# Clocks (fixed-clock uart/periph in DTS)
+CONFIG_COMMON_CLK=y
+# initramfs (built-in, path injected at build time via INITRAMFS_SOURCE)
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_INITRAMFS_COMPRESSION_NONE=y
+# Userspace basics
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_UNIX=y
+CONFIG_INET=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_TMPFS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_TTY_PRINTK=n
+CONFIG_UNIX98_PTYS=y
+CONFIG_LEGACY_PTY_COUNT=16
+CONFIG_PRINTK=y
+CONFIG_PRINTK_TIME=y
+# No modules for the minimal image (static, initramfs shell only)
+CONFIG_MODULES=n
+# Trim the fat: no wireless, netfilter extras, usb, mmc, drm, sound, media
+CONFIG_WIRELESS=n
+CONFIG_NETFILTER=n
+CONFIG_USB_SUPPORT=n
+CONFIG_MMC=n
+CONFIG_DRM=n
+CONFIG_SOUND=n
+CONFIG_MEDIA_SUPPORT=n
+CONFIG_FB=n
+CONFIG_INPUT=n
+CONFIG_HID_SUPPORT=n
+CONFIG_WLAN=n
+# Keep image small-ish, keep symbols for debugging TFTP boot
+CONFIG_KALLSYMS=y
+CONFIG_DEBUG_KERNEL=n
+# Cross-build with an older toolchain: no host-built gcc plugins
+# (avoids host libmpc-dev dependency for arm_ssp_per_task plugin)
+CONFIG_GCC_PLUGINS=n

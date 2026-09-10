@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# enet66b - LAN-side link bring-up for the BCM6764 (Cudy WR3600):
+#           Merlin16 serdes (core 0 lane 0, 2500Base-X) + external BCM53134.
+#
+# Set ENET66B_STANDALONE_MDIO=0 once the SoC-side driver in port66/enet66
+# exports sf2_mdio_read()/sf2_mdio_write(); then enet66b_mdio.ko is neither
+# built nor needed.
+
+ENET66B_STANDALONE_MDIO ?= 1
+
+obj-m += serdes6764.o
+obj-m += extsw6764.o
+
+ifeq ($(ENET66B_STANDALONE_MDIO),1)
+ccflags-y += -DENET66B_STANDALONE_MDIO
+obj-m += enet66b_mdio.o
+enet66b_mdio-y := sf2_mdio_local.o
+endif
+
+ccflags-y += -I$(src)
