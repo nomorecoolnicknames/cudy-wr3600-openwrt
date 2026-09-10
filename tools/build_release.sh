@@ -103,7 +103,6 @@ for m in port66/enet66/enet6764.ko port66/enet66b/serdes6764.ko \
          port66/enet66b/extsw6764.ko port66/leds66/leds-bca-cled.ko \
          port66/vpcie66/vpcie66.ko bsp-6.6/compat/bcm_shim.ko \
          port66/shim66/h30_bpm_live.ko port66/shim66/h30_ubus_all.ko \
-         port66/shim66/h30_ubus_probe.ko port66/shim66/h30_rx_snapshot.ko \
          port66/shim66/h30_irqgate.ko port66/reboot66/reboot6764.ko; do
 	need "$R/$m"
 done
@@ -118,6 +117,14 @@ mkdir -p "$W/initramfs"/{bin,dev,proc,sys,etc,sbin,tmp}
 cp "$R/kernel-6.6/initramfs-release/init" "$W/initramfs/init"
 chmod 0755 "$W/initramfs/init"
 cp "$R/kernel-6.6/initramfs-release/modules.order" "$W/initramfs/modules.order"
+# Optional per-module argument files: the preinit runs
+# "insmod <module> $(cat <module>.args)", which is how split=1 / tag_fmt are
+# selected without rebuilding the driver.
+for a in "$R"/kernel-6.6/initramfs-release/*.args; do
+	[ -f "$a" ] || continue
+	cp "$a" "$W/initramfs/$(basename "$a")"
+	echo "module args: $(basename "$a") = $(cat "$a")"
+done
 # static busybox: the only userspace in the initramfs (init runs
 # "busybox --install -s /bin", the symlinks below are for convenience)
 cp "$BUSYBOX" "$W/initramfs/bin/busybox"
@@ -201,7 +208,6 @@ cp "$R/port66/enet66/enet6764.ko" "$R/port66/enet66b/serdes6764.ko" \
    "$R/port66/enet66b/extsw6764.ko" "$R/port66/leds66/leds-bca-cled.ko" \
    "$R/port66/vpcie66/vpcie66.ko" "$R/bsp-6.6/compat/bcm_shim.ko" \
    "$R/port66/shim66/h30_bpm_live.ko" "$R/port66/shim66/h30_ubus_all.ko" \
-   "$R/port66/shim66/h30_ubus_probe.ko" "$R/port66/shim66/h30_rx_snapshot.ko" \
    "$R/port66/shim66/h30_irqgate.ko" "$R/port66/reboot66/reboot6764.ko" \
    "$KM/"
 cp "$BLOBS/wl-h7.ko"        "$W/rootfs/lib/modules/blobs/wl.ko"
@@ -258,9 +264,27 @@ built=$BUILT_UTC
 EOF
 # sanity: every module wifi66 loads must exist
 miss=0
-for m in $(sed -n 's#.*/lib/modules/6\.6\.93/\([a-z0-9_-]*\)\.ko.*#\1#p' \
-		"$W/rootfs/etc/init.d/wifi66" | sort -u); do
-	[ -f "$KM/$m.ko" ] || { echo "MISSING module: $m"; miss=1; }
+# Modules wifi66 loads: its literal ".../<name>.ko" paths plus the values of its
+# "for m in <list>; ... insmod .../$m.ko" loops (a template match for the loop
+# variable would otherwise show up as a bogus module named "m"). The review
+# asked for the full set - it used to cover a handful of the ~40 names.
+wifi66_mods=$(python3 - "$W/rootfs/etc/init.d/wifi66" <<'PYEOF'
+import re, sys
+t = open(sys.argv[1]).read()
+names = set(re.findall(r'/lib/modules/6\.6\.93/([a-z0-9_-]+)\.ko', t))
+for lst in re.findall(r'for m in (.*?);\s*do', t, re.S):
+    names.update(w for w in re.split(r'[\s\\]+', lst)
+                 if re.fullmatch(r'[a-z][a-z0-9_-]*', w))
+names.discard('m')
+print(' '.join(sorted(names)))
+PYEOF
+)
+echo "modules wifi66 loads: $(echo $wifi66_mods | wc -w)"
+for m in $wifi66_mods; do
+	# the port modules live in lib/modules/6.6.93, the vendor Wi-Fi blobs in
+	# lib/modules/blobs
+	[ -f "$KM/$m.ko" ] || [ -f "$W/rootfs/lib/modules/blobs/$m.ko" ] || \
+		{ echo "MISSING module: $m"; miss=1; }
 done
 [ "$miss" = 0 ] || die "rootfs is missing modules that wifi66 loads"
 
