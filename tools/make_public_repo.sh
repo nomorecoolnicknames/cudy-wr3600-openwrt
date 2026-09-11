@@ -36,6 +36,7 @@ say "kernel side"
 cp "$R/kernel-6.6/build.sh" "$R/kernel-6.6/initramfs.list" "$DEST/kernel/"
 cp -a "$R/kernel-6.6/initramfs-release" "$DEST/kernel/"
 cp -a "$R/kernel-6.6/rootfs-overlay-forum" "$DEST/kernel/"
+cp -a "$R/kernel-6.6/pkgs" "$DEST/kernel/"          # vendored OpenWrt ipks (wifi-scripts, iwinfo) + checksums
 rsync -a "${EXCL[@]}" "$R/kernel-6.6/port/" "$DEST/kernel/port/"
 
 say "out-of-tree modules"
@@ -47,7 +48,7 @@ rsync -a "${EXCL[@]}" "$R/bsp-6.6/compat/" "$DEST/bsp-6.6/compat/"
 
 say "tools"
 for t in build_release.sh clean_release_rootfs.sh make_source_tarball.sh \
-         make_public_repo.sh insmodf.c ubiwrite.c ubimkvol.c modvermagic.py modpvfix.py \
+         make_public_repo.sh insmodf.c ubiwrite.c ubimkvol.c wl66ctl.c wl66ctl_test.sh modvermagic.py modpvfix.py \
          module_header_fix.py erom_decode.py; do
 	[ -f "$R/tools/$t" ] && cp "$R/tools/$t" "$DEST/tools/"
 done
@@ -66,6 +67,13 @@ cp "$R/release/RELEASE_NOTES.md" "$DEST/docs/"
 cp "$R/release/ROOTFS_PACKAGES.md" "$DEST/docs/"
 cp "$R/release/SHA256SUMS" "$DEST/release/"
 [ -f "$R/docs/4PDA_POST.txt" ] && cp "$R/docs/4PDA_POST.txt" "$DEST/docs/"
+# Wi-Fi research reports (our own analysis of the stock firmware; bench MAC and
+# host paths scrubbed)
+mkdir -p "$DEST/docs/wifi-width"
+for f in STOCK_WIFI_BRINGUP.md WL_IOCTL_SPEC.md; do
+	[ -f "$R/triaging/wifi-width/$f" ] && sed -E 's#/home/[a-z0-9_]+/cudy_be3600/#<repo>/#g; s/d4:0d:ab:46:c4:5[0-9a-f]/xx:xx:xx:xx:xx:xx/g' \
+		"$R/triaging/wifi-width/$f" > "$DEST/docs/wifi-width/$f"
+done
 
 cat > "$DEST/LICENSE" <<'EOF'
 This repository is licensed under the GNU General Public License, version 2

@@ -1,0 +1,41 @@
+# Cudy WR3600: wl0 = phy0 = 5 GHz, wl1 = phy1 = 2.4 GHz (stock Broadcom blob).
+# Managed from LuCI -> Network -> Wireless. htmode sets the channel width the
+# blob is asked for: HT20/HT40 (2.4 GHz), VHT20/VHT40/VHT80/VHT160 (5 GHz).
+# 160 MHz on channel 36 covers the DFS channels 52-64: the blob does no radar
+# detection in this firmware, so use 80 MHz unless you know it is allowed.
+
+config wifi-device 'radio0'
+	option type 'mac80211'
+	option phy 'phy0'
+	option band '5g'
+	option channel '36'
+	option htmode 'VHT80'
+	option country 'RU'
+	option cell_density '0'
+
+config wifi-iface 'default_radio0'
+	option device 'radio0'
+	option ifname 'wl0'
+	option network 'lan'
+	option mode 'ap'
+	option ssid 'CudyWR3600'
+	option encryption 'psk2'
+	option key '12345678'
+
+config wifi-device 'radio1'
+	option type 'mac80211'
+	option phy 'phy1'
+	option band '2g'
+	option channel '6'
+	option htmode 'HT20'
+	option country 'RU'
+	option cell_density '0'
+
+config wifi-iface 'default_radio1'
+	option device 'radio1'
+	option ifname 'wl1'
+	option network 'lan'
+	option mode 'ap'
+	option ssid 'CudyWR3600'
+	option encryption 'psk2'
+	option key '12345678'

@@ -29,6 +29,7 @@ say "kernel side"
 cp "$R/kernel-6.6/build.sh" "$R/kernel-6.6/initramfs.list" "$W/kernel/"
 cp -a "$R/kernel-6.6/initramfs-release" "$W/kernel/"
 cp -a "$R/kernel-6.6/rootfs-overlay-forum" "$W/kernel/"
+cp -a "$R/kernel-6.6/pkgs" "$W/kernel/"                 # vendored OpenWrt ipks (wifi-scripts, iwinfo) + checksums
 mkdir -p "$W/kernel/port"
 rsync -a --exclude '*.itb' --exclude '*.bak*' --exclude '.omc' \
 	--exclude '*.orig' --exclude '*.rej' --exclude '*.log' \
@@ -58,7 +59,8 @@ rsync -a \
 say "build scripts"
 cp "$R/tools/build_release.sh" "$R/tools/clean_release_rootfs.sh" \
    "$R/tools/make_source_tarball.sh" "$R/tools/insmodf.c" \
-   "$R/tools/ubiwrite.c" "$R/tools/ubimkvol.c" "$W/tools/"
+   "$R/tools/ubiwrite.c" "$R/tools/ubimkvol.c" "$R/tools/wl66ctl.c" \
+   "$R/tools/wl66ctl_test.sh" "$W/tools/"
 
 say "documentation"
 cp "$R/docs/SOURCE_README.md" "$W/README.md"

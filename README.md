@@ -45,13 +45,17 @@ behind a small open-source compatibility layer.
 * Persistent settings, `sysupgrade` and the factory MAC are new in
   2026-09-11 and are marked in `docs/RELEASE_CHECKLIST.md` (section I) with
   their hardware-test status; read it before relying on them.
-* Wi-Fi is driven by static `hostapd` configs (`/etc/hostapd-wl0.conf`,
-  `-wl1.conf`), not by LuCI's wireless page.
+* Wi-Fi is configured from LuCI → Network → Wireless (netifd driver script
+  `lib/netifd/wireless/mac80211.sh`, one AP per radio, no guest/mesh/STA).
+  Channel width (up to 160 MHz on 5 GHz, 40 on 2.4), 11ax and 11be are set
+  through the blob's own ioctls (`wl66ctl`, `usr/sbin/wl66-chan`), the way
+  the factory firmware does it; hostapd is only the authenticator. New in
+  2026-09-11, hardware status in `docs/RELEASE_CHECKLIST.md` section J.
 * `root` password is `12345678` (deliberately predictable: the firmware is
   installed and updated over Wi-Fi). Admin access from the WAN side is
   limited to private (RFC1918) source addresses by default — see `wan_admin`
-  in `/etc/config/wifi66`. Change both passwords (`passwd`, `wpa_passphrase`
-  in `/etc/hostapd-wl*.conf`); they now survive a reboot.
+  in `/etc/config/wifi66`. Change both passwords (`passwd`; Wi-Fi in LuCI or
+  `/etc/config/wireless`); they now survive a reboot.
 
 ## Install
 
@@ -73,7 +77,8 @@ Firmware files and checksums are on the
 |---|---|
 | `kernel/port/` | kernel patch, device tree, configs, FIT description |
 | `kernel/initramfs-release/` | preinit (slot-aware rootfs selection, watchdog fuse) |
-| `kernel/rootfs-overlay-forum/` | OpenWrt overlay: `wifi66` init, hostapd, uci configs |
+| `kernel/rootfs-overlay-forum/` | OpenWrt overlay: `wifi66` init, netifd wireless driver, uci configs |
+| `kernel/pkgs/` | vendored OpenWrt 24.10.2 packages the armsr rootfs lacks (wifi-scripts, iwinfo), checksummed |
 | `port66/enet66`, `port66/enet66b` | Ethernet: SF2 switch, SystemPort, PMC, SerDes, BCM53134 |
 | `port66/vpcie66` | virtual PCI host presenting the on-chip radios to the blob |
 | `port66/leds66` | panel LED controller |

@@ -114,8 +114,8 @@ ssh root@192.168.10.1 'sysupgrade -v /tmp/cudy-wr3600-sysupgrade-<версия>.
   (LuCI — `http://192.168.10.1`, SSH — `root`, пароль `12345678`).
 - **Кабель провайдера — в WAN-порт**, устройства — в LAN1–4 или по Wi-Fi
   (с версии 2026-09-10.4; раньше WAN-порт не линковал).
-- Смените оба пароля (`passwd`; `wpa_passphrase` в `/etc/hostapd-wl0.conf` и
-  `-wl1.conf`). С версии 2026-09-11 настройки хранятся в томе `cudy66_data` и
+- Смените оба пароля (`passwd`; Wi-Fi — в LuCI → Network → Wireless, там же
+  канал и ширина). С версии 2026-09-11 настройки хранятся в томе `cudy66_data` и
   переживают перезагрузку; сброс — LuCI «Perform reset» или `firstboot -y`.
   Со стороны WAN вход на SSH/LuCI по умолчанию открыт только из частных
   адресов (`wan_admin` в `/etc/config/wifi66`).

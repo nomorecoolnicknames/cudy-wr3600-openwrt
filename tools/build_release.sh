@@ -204,6 +204,17 @@ mkdir -p "$W/rootfs"
 rsync -a --exclude 'etc/uci-defaults/' "$STAGE_BASE/" "$W/rootfs/"
 "$R/tools/clean_release_rootfs.sh" "$W/rootfs" "$BASE_ROOTFS"
 
+# OpenWrt packages the armsr staging tree lacks (LuCI wireless page needs
+# them): vendored as .ipk in kernel-6.6/pkgs with pinned checksums, unpacked
+# here. Our overlay then replaces wifi-scripts' mac80211 driver/detector.
+( cd "$R/kernel-6.6/pkgs" && sha256sum -c --quiet SHA256SUMS ) || die "kernel-6.6/pkgs checksum mismatch"
+for ipk in "$R"/kernel-6.6/pkgs/*.ipk; do
+	tar -xzOf "$ipk" ./data.tar.gz | tar -xz -C "$W/rootfs" --no-same-owner
+	echo "unpacked $(basename "$ipk")"
+done
+# hostapd is driven by netifd now; static configs from older stage trees go
+rm -f "$W/rootfs"/etc/hostapd-wl*.conf
+
 KM=$W/rootfs/lib/modules/6.6.93
 mkdir -p "$KM" "$W/rootfs/lib/modules/blobs" "$W/rootfs/usr/bin"
 # The OpenWrt armsr rootfs ships kmods built for a different config: different
@@ -247,6 +258,13 @@ cp "$W/ubiwrite" "$REL/ubiwrite"
 file "$W/ubimkvol" | grep -q 'ARM' || die "ubimkvol is not an ARM binary"
 cp "$W/ubimkvol" "$W/rootfs/usr/bin/ubimkvol"
 chmod 0755 "$W/rootfs/usr/bin/ubimkvol"
+# wl66ctl: the blob's private ioctl interface (channel width, 11ax/11be) for
+# /usr/sbin/wl66-chan; GPL, tools/wl66ctl.c
+"${TC}gcc" -static -Os -s -Wall -o "$W/wl66ctl" "$R/tools/wl66ctl.c"
+file "$W/wl66ctl" | grep -q 'ARM' || die "wl66ctl is not an ARM binary"
+# (the chanspec encoder is checked on the host by tools/wl66ctl_test.sh)
+cp "$W/wl66ctl" "$W/rootfs/usr/bin/wl66ctl"
+chmod 0755 "$W/rootfs/usr/bin/wl66ctl"
 # Bootloader slot metadata blobs (COMMITTED=1|2 + CRC32, exactly what
 # bcm_bootstate writes) and the in-place updater. The updater writes the OTHER
 # slot and needs the blob for it, so both live in the image; they are also

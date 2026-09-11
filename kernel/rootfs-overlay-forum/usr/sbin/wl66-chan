@@ -1,0 +1,62 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# wl66-chan <ifname> <2g|5g> <channel> <htmode> <pre|post>
+#
+# Channel width for the stock Broadcom blob. hostapd cannot ask for it (the
+# blob's wiphy advertises no HT/VHT capabilities, so cfg80211 refuses wide
+# chandefs); the blob takes the width from its own "bw_cap" (max width per
+# band, applied when the AP starts) and "chanspec" (explicit channel/width),
+# the same knobs the factory firmware's wlconf/wl use. wl66ctl is our GPL
+# tool speaking that ioctl interface. Called by the netifd driver twice:
+# "pre" before hostapd starts (bw_cap while the radio is down, HE/EHT on),
+# "post" after the AP is up (explicit chanspec).
+T=/usr/bin/wl66ctl
+ifn=$1; band=$2; ch=$3; ht=$4; phase=$5
+
+log() { logger -t wl66-chan "$ifn: $*"; echo "wl66-chan $ifn: $*" > /dev/kmsg 2>/dev/null; }
+run() { "$T" "$ifn" "$@" 2>&1 | logger -t wl66-chan; }
+
+[ -x "$T" ] || { log "no $T, width left at the driver default"; exit 0; }
+
+case "$ht" in
+	*160) bw=160; mask=0xf ;;
+	*80)  bw=80;  mask=0x7 ;;
+	*40*) bw=40;  mask=0x3 ;;
+	*)    bw=20;  mask=0x1 ;;
+esac
+[ "$band" = 2g ] && [ "$bw" -gt 40 ] && { bw=40; mask=0x3; }
+
+case "$phase" in
+pre)
+	# the order the factory firmware uses (wlconf up / bcm_uci2nv.sh):
+	# modes and features while the radio is down, bw_cap, then up; the
+	# explicit chanspec comes after the AP is running (phase "post").
+	run down
+	run nmode 1
+	run vhtmode 1
+	run he enab 1
+	run he features -1
+	run eht enab 1
+	run eht features -1
+	run bw_cap "$band" "$mask"
+	if [ "$band" = 2g ]; then run obss_coex 1; else run obss_coex 0; fi
+	run up
+	log "bw_cap $band $mask (want $bw MHz)"
+	;;
+post)
+	case "$bw" in
+	20) spec="$ch" ;;
+	40)
+		if [ "$band" = 2g ]; then
+			[ "$ch" -le 7 ] && spec="${ch}l" || spec="${ch}u"
+		else
+			[ $(( (ch / 4) % 2 )) -eq 1 ] && spec="${ch}l" || spec="${ch}u"
+		fi ;;
+	*) spec="$ch/$bw" ;;
+	esac
+	run chanspec "$spec"
+	log "chanspec $spec -> now $("$T" "$ifn" chanspec 2>/dev/null)"
+	;;
+esac
+exit 0
