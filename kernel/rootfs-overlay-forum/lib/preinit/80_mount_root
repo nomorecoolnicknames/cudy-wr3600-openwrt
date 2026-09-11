@@ -46,7 +46,7 @@ cudy_mount_volume() {
 		ubimkvol ubi0 "$CUDY_VOL_NAME" "$CUDY_VOL_BYTES" >/dev/null 2>&1
 		dev="$(find_cudy_vol)" || return 1
 	}
-	grep -q ' ubifs$' /proc/filesystems || return 1
+	grep -qw ubifs /proc/filesystems || return 1
 	mount -t ubifs -o rw,noatime "$dev" /overlay 2>/dev/null || return 1
 	# must be writable, or it is useless as an upper layer
 	if ! touch /overlay/.cudy66 2>/dev/null; then

@@ -49,13 +49,13 @@ struct ubi_rsvol_req {
 	int32_t vol_id;
 } __attribute__((packed));
 
-static int read_attr(const char *fmt, int id, const char *attr, char *buf, size_t len)
+static int read_attr(const char *ubiname, int id, const char *attr, char *buf, size_t len)
 {
 	char path[128];
 	FILE *f;
 	size_t n;
 
-	snprintf(path, sizeof(path), fmt, id, attr);
+	snprintf(path, sizeof(path), "/sys/class/ubi/%s_%d/%s", ubiname, id, attr);
 	f = fopen(path, "r");
 	if (!f)
 		return -1;
@@ -116,7 +116,7 @@ int main(int argc, char **argv)
 		}
 		if (strcmp(volname, name))
 			continue;
-		if (read_attr("/sys/class/ubi/%s_%d/%s", id, "data_bytes", sz, sizeof(sz))) {
+		if (read_attr(ubiname, id, "data_bytes", sz, sizeof(sz))) {
 			/* fall back: assume it is fine */
 			printf("%d\n", id);
 			return 0;
@@ -126,16 +126,17 @@ int main(int argc, char **argv)
 			printf("%d\n", id);
 			return 0;
 		}
-		snprintf(path, sizeof(path), "/dev/%s_%d", ubiname, id);
-		fd = open(path, O_RDWR);
+		/* UBI_IOCRSVOL is a UBI-device ioctl (/dev/ubiN), not a volume one */
+		fd = open(dev, O_RDWR);
 		if (fd < 0) {
-			fprintf(stderr, "ubimkvol: open %s: %s\n", path, strerror(errno));
+			fprintf(stderr, "ubimkvol: open %s: %s\n", dev, strerror(errno));
 			return 1;
 		}
 		{
 			struct ubi_rsvol_req rs = { .bytes = bytes, .vol_id = id };
 			if (ioctl(fd, UBI_IOCRSVOL, &rs) < 0) {
-				fprintf(stderr, "ubimkvol: resize %s: %s\n", path, strerror(errno));
+				fprintf(stderr, "ubimkvol: resize %s vol %d to %llu: %s\n",
+					dev, id, bytes, strerror(errno));
 				close(fd);
 				return 1;
 			}

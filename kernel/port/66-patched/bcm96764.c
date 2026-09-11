@@ -21,6 +21,7 @@
 #include <linux/panic.h>
 #include <linux/panic_notifier.h>
 #include <linux/notifier.h>
+#include <linux/reboot.h>
 #include <linux/sizes.h>
 #include <linux/timer.h>
 #include <linux/jiffies.h>
@@ -128,14 +129,19 @@ static struct timer_list bcm96764_wdt_timer;
 /* Safety deadline: stop kicking after this many seconds after boot, so a
  * userspace that came up but cannot be reached (no SSH) still falls back to
  * the committed stock slot via the watchdog instead of needing a power cycle.
- * Extend from userspace by writing seconds to /proc/bcm96764_wdt_kick_secs. */
+ * Extend from userspace by writing seconds to /proc/bcm96764_wdt_kick_secs;
+ * 0 disables the deadline (the kernel keeps kicking for good). */
 static unsigned long bcm96764_wdt_kick_secs = 600;
 
 static void bcm96764_wdt_kick(struct timer_list *t)
 {
 	void __iomem *wdt = PERIPH_VIRT(BCM96764_WDT_PHYS);
 
-	if (time_after(jiffies, INITIAL_JIFFIES + bcm96764_wdt_kick_secs * HZ)) {
+	/* 0 = no deadline: userspace clears it once it is up and reachable
+	 * (wifi66). A finite value is only the boot-time safety net; leaving
+	 * one in place would reset a healthy router when it expires. */
+	if (bcm96764_wdt_kick_secs &&
+	    time_after(jiffies, INITIAL_JIFFIES + bcm96764_wdt_kick_secs * HZ)) {
 		pr_warn("bcm96764: watchdog kick deadline reached, letting the WDT reset\n");
 		return;
 	}
@@ -146,6 +152,35 @@ static void bcm96764_wdt_kick(struct timer_list *t)
 	dsb(sy);
 	mod_timer(&bcm96764_wdt_timer, jiffies + 5 * HZ);
 }
+
+/* Reboot path. PSCI SYSTEM_RESET hangs this SoC (the ATF never resets it),
+ * and a shutdown hook of the vendor Wi-Fi blobs can block in
+ * device_shutdown() - which runs with interrupts enabled, so the kicker above
+ * would keep feeding the watchdog forever and the board would never reset.
+ * Arm the watchdog here, before device_shutdown(), and stop kicking: whatever
+ * happens next (hung hook, hung PSCI), the SoC resets within one period.
+ * The vendor sequence is stop -> VAL -> start. */
+static int bcm96764_reboot(struct notifier_block *nb, unsigned long action,
+			   void *data)
+{
+	void __iomem *wdt = PERIPH_VIRT(BCM96764_WDT_PHYS);
+
+	del_timer_sync(&bcm96764_wdt_timer);
+	writel_relaxed(0xee00, wdt + WDT_CTL_REG);
+	writel_relaxed(0x00ee, wdt + WDT_CTL_REG);
+	writel_relaxed(BCM96764_WDT_HZ * BCM96764_WDT_SECS, wdt + WDT_VAL_REG);
+	writel_relaxed(WDT_CTL_START1, wdt + WDT_CTL_REG);
+	writel_relaxed(WDT_CTL_START2, wdt + WDT_CTL_REG);
+	dsb(sy);
+	pr_emerg("bcm96764: WDT armed for reset (%u s), shutdown continues\n",
+		 BCM96764_WDT_SECS);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block bcm96764_reboot_nb = {
+	.notifier_call = bcm96764_reboot,
+	.priority = INT_MAX,
+};
 
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
@@ -175,6 +210,7 @@ static int __init bcm96764_mark_arch_init(void)
 {
 	proc_create("bcm96764_wdt_kick_secs", 0200, NULL, &bcm96764_wdt_secs_ops);
 	atomic_notifier_chain_register(&panic_notifier_list, &bcm96764_panic_nb);
+	register_reboot_notifier(&bcm96764_reboot_nb);
 	timer_setup(&bcm96764_wdt_timer, bcm96764_wdt_kick, 0);
 	mod_timer(&bcm96764_wdt_timer, jiffies + 5 * HZ);
 	bcm96764_mark(0x1D);

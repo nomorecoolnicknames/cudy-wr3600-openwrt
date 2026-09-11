@@ -42,15 +42,15 @@ behind a small open-source compatibility layer.
   slot (A/B needs it). After that the only way back to stock is Cudy's TFTP
   recovery with the signed factory image. The manual updater
   (`update-from-release.sh`) refuses to do this without `FORCE=1`.
-* Persistent settings, `sysupgrade` and the factory MAC are new in
-  2026-09-11 and are marked in `docs/RELEASE_CHECKLIST.md` (section I) with
-  their hardware-test status; read it before relying on them.
+* Persistent settings, `sysupgrade`, factory MACs and LuCI Wi-Fi are new in
+  2026-09-11 and were verified on one board (`docs/RELEASE_CHECKLIST.md`,
+  sections I and J).
 * Wi-Fi is configured from LuCI → Network → Wireless (netifd driver script
   `lib/netifd/wireless/mac80211.sh`, one AP per radio, no guest/mesh/STA).
   Channel width (up to 160 MHz on 5 GHz, 40 on 2.4), 11ax and 11be are set
   through the blob's own ioctls (`wl66ctl`, `usr/sbin/wl66-chan`), the way
-  the factory firmware does it; hostapd is only the authenticator. New in
-  2026-09-11, hardware status in `docs/RELEASE_CHECKLIST.md` section J.
+  the factory firmware does it; hostapd is only the authenticator. Verified on
+  the bench (80/160 MHz on 5 GHz, 40 on 2.4 GHz).
 * `root` password is `12345678` (deliberately predictable: the firmware is
   installed and updated over Wi-Fi). Admin access from the WAN side is
   limited to private (RFC1918) source addresses by default — see `wan_admin`

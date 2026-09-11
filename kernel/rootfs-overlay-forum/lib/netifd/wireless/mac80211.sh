@@ -133,18 +133,30 @@ EOF
 		return 1
 	}
 
+	# "wifi reload" tears the radio down and sets it up again at once; the
+	# blob is still stopping the old BSS when the new hostapd arrives and
+	# that hostapd then fails (COUNTRY_UPDATE->DISABLED, seen on the bench).
+	# Wait for the previous hostapd of this radio to be gone, then give the
+	# driver a moment; "wifi down; sleep; wifi up" always worked.
+	local pidf="/var/run/wifi-$phy.pid" i=0 opid
+	opid="$(cat "$pidf" 2>/dev/null)"
+	while [ -n "$opid" ] && [ -d "/proc/$opid" ] && [ $i -lt 10 ]; do
+		sleep 1; i=$((i + 1))	# busybox sleep here takes whole seconds only
+	done
+	[ -n "$opid" ] && [ -d "/proc/$opid" ] && kill "$opid" 2>/dev/null
 	ip link set "$ap_ifname" down 2>/dev/null
+	[ -n "$opid" ] && sleep 4
 	[ -x /usr/sbin/wl66-chan ] && \
 		/usr/sbin/wl66-chan "$ap_ifname" "$band" "$channel" "$htmode" pre
 
-	local pidf="/var/run/wifi-$phy.pid" i=0
+	i=0
 	rm -f "$pidf"
 	/usr/sbin/hostapd -s -P "$pidf" -B "$hostapd_conf_file" || {
 		wl66_log "radio $phy: hostapd failed to start ($hostapd_conf_file)"
 		wireless_setup_failed HOSTAPD_START_FAILED
 		return 1
 	}
-	while [ ! -s "$pidf" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+	while [ ! -s "$pidf" ] && [ $i -lt 5 ]; do sleep 1; i=$((i + 1)); done
 	[ -s "$pidf" ] || {
 		wireless_setup_failed HOSTAPD_START_FAILED
 		return 1
@@ -170,7 +182,7 @@ drv_mac80211_teardown() {
 	# netifd has already stopped the hostapd it was told about
 	ifn="$(wl66_phy_ifname "$phy")"
 	[ -n "$ifn" ] && ip link set "$ifn" down 2>/dev/null
-	rm -f "/var/run/hostapd-$phy.conf" "/var/run/wifi-$phy.pid"
+	rm -f "/var/run/hostapd-$phy.conf"
 }
 
 drv_mac80211_cleanup() {

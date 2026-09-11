@@ -168,14 +168,18 @@ class StockWeb:
         }).encode()
         st, body = self.fetch("/cgi-bin/luci/admin/wizard", data=data,
                               headers={"Content-Type": "application/x-www-form-urlencoded"})
-        b = body.decode("utf-8", "replace")
-        if "luci_password" in b and st != 302:
-            die("web login failed — wrong password?")
-        if not any(c.name == "sysauth" or "sysauth" in c.name for c in self.jar):
+        # The session cookie is the truth. The response body is not: a
+        # successful login can be a 302, or a 200 with the setup wizard page
+        # (seen on 2.3.16 after the stock config was reset), and that page
+        # happens to contain the string "luci_password" too.
+        logged_in = any("sysauth" in c.name for c in self.jar)
+        if not logged_in:
             # some builds only set the cookie on the redirect; do a sanity GET
             st, body = self.fetch("/cgi-bin/luci/admin/network/vpn/openvpn")
-            if b"luci_password" in body:
-                die("web login failed — wrong password?")
+            logged_in = (b'name="salt"' not in body and
+                         b"luci_password2" not in body and st == 200)
+        if not logged_in:
+            die("web login failed — wrong password?")
         say("web login ok")
 
     @staticmethod
@@ -454,9 +458,9 @@ def main():
     ssh.run("sync; (sleep 1; reboot) >/dev/null 2>&1 &", check=False)
     say("rebooting. In about two minutes the router comes up as Wi-Fi 'CudyWR3600' "
         "(password 12345678), address 192.168.10.1 over Wi-Fi.\n"
-        "    Plug your internet cable into a LAN port: the WAN port's PHY is brought\n"
-        "    up (AFE/PLL calibration) and links, but the switch still does not forward\n"
-        "    its traffic yet, so a LAN port is the working uplink.")
+        "    Plug your internet cable into the WAN port; LAN1-4 and Wi-Fi are the\n"
+        "    home network (192.168.10.1/24). Settings, Wi-Fi and updates: LuCI at\n"
+        "    http://192.168.10.1 (root / 12345678 - change it).")
 
 
 if __name__ == "__main__":

@@ -116,6 +116,26 @@ fi
 	die "no bootloader metadata blob at $META_DIR/meta-committed$TGT.bin"
 
 # ---------------------------------------------------------------------------
+# Does it fit? The factory rootfs volumes are sized to the factory image
+# (rootfs2 = 190 LEB on the bench board, 213 KB short of our rootfs - found
+# when the first sysupgrade failed with UBI_IOCVOLUP: Invalid argument). Grow
+# the target volume when needed; UBI had 32 free PEBs on that board.
+# ---------------------------------------------------------------------------
+UBIMKVOL=${UBIMKVOL:-/usr/bin/ubimkvol}
+vol_fits() { # $1 = /dev/ubi0_N  $2 = bytes needed  $3 = volume name
+	local id=${1##*/} have
+	have=$(cat "/sys/class/ubi/$id/data_bytes" 2>/dev/null || echo 0)
+	[ "$have" -ge "$2" ] && return 0
+	say "$3 ($1) holds $have bytes, need $2: growing it"
+	[ -x "$UBIMKVOL" ] || die "$3 is too small and there is no ubimkvol at $UBIMKVOL"
+	"$UBIMKVOL" ubi0 "$3" "$2" >/dev/null || die "cannot grow $3 to $2 bytes (UBI out of space?)"
+	have=$(cat "/sys/class/ubi/$id/data_bytes" 2>/dev/null || echo 0)
+	[ "$have" -ge "$2" ] || die "$3 is still too small after resize ($have < $2)"
+}
+vol_fits "$BVOL" "$bsize" "bootfs$TGT"
+vol_fits "$RVOL" "$rsize" "rootfs$TGT"
+
+# ---------------------------------------------------------------------------
 # Write, verify, commit
 # ---------------------------------------------------------------------------
 say "writing $BVOL"

@@ -9,8 +9,9 @@
 # pulling the plug during an upgrade leaves a bootable router.
 #
 # "Keep settings" is implicit here: configuration lives in the persistent
-# overlay volume, which the upgrade leaves alone. sysupgrade -n (SAVE_CONFIG=0)
-# wipes it, which is what a factory reset should do.
+# overlay volume, which the upgrade leaves alone. sysupgrade -n (no backup
+# archive, UPGRADE_BACKUP empty) wipes it, which is what a factory reset
+# should do.
 
 CUDY_VOL_NAME=cudy66_data
 
@@ -18,7 +19,7 @@ CUDY_VOL_NAME=cudy66_data
 # (plus busybox and a fixed applet list, see /lib/upgrade/stage2). Without
 # these the updater, ubiwrite and the slot metadata blobs are simply absent
 # in stage2 - found while reviewing the first draft of this file.
-RAMFS_COPY_BIN="/usr/bin/ubiwrite sha256sum head"
+RAMFS_COPY_BIN="/usr/bin/ubiwrite /usr/bin/ubimkvol sha256sum head"
 RAMFS_COPY_DATA="/usr/bin/update-from-release.sh /usr/share/cudy/meta-committed1.bin /usr/share/cudy/meta-committed2.bin "
 
 cudy_vol_dev() {
@@ -54,7 +55,10 @@ platform_do_upgrade() {
 	( cd "$dir" && sha256sum -c SHA256SUMS ) || {
 		echo "image checksum mismatch - refusing to flash"; return 1; }
 
-	if [ "${SAVE_CONFIG:-1}" = "0" ]; then
+	# "Keep settings" reaches stage2 only as UPGRADE_BACKUP (the backup
+	# archive procd was given); with sysupgrade -n it is empty and
+	# SAVE_CONFIG is not exported at all (checked in 24.10.2 stage2/do_stage2).
+	if [ -z "$UPGRADE_BACKUP" ]; then
 		dev="$(cudy_vol_dev)" && {
 			echo "wiping saved settings ($dev)"
 			# stage2 has lazily unmounted /overlay; the volume stays busy

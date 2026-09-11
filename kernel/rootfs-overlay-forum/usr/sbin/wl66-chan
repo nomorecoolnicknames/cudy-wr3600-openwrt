@@ -27,12 +27,15 @@ case "$ht" in
 esac
 [ "$band" = 2g ] && [ "$bw" -gt 40 ] && { bw=40; mask=0x3; }
 
+# NEVER "down"/"up" the radio here: WLC_DOWN on a radio that has a BSS hangs
+# the whole SoC under the shim (bench, 2026-09-11: the box froze on the first
+# ioctl, no log, watchdog reset only), and a hang during boot would loop the
+# router through the watchdog forever. The iovars below are accepted with the
+# radio up; whether the blob applies the chanspec before the AP starts is what
+# the "post" readback shows.
 case "$phase" in
 pre)
-	# the order the factory firmware uses (wlconf up / bcm_uci2nv.sh):
-	# modes and features while the radio is down, bw_cap, then up; the
-	# explicit chanspec comes after the AP is running (phase "post").
-	run down
+	# the factory firmware's order (wlconf up / bcm_uci2nv.sh), minus down/up
 	run nmode 1
 	run vhtmode 1
 	run he enab 1
@@ -41,22 +44,21 @@ pre)
 	run eht features -1
 	run bw_cap "$band" "$mask"
 	if [ "$band" = 2g ]; then run obss_coex 1; else run obss_coex 0; fi
-	run up
-	log "bw_cap $band $mask (want $bw MHz)"
-	;;
-post)
-	case "$bw" in
-	20) spec="$ch" ;;
-	40)
-		if [ "$band" = 2g ]; then
-			[ "$ch" -le 7 ] && spec="${ch}l" || spec="${ch}u"
-		else
-			[ $(( (ch / 4) % 2 )) -eq 1 ] && spec="${ch}l" || spec="${ch}u"
-		fi ;;
-	*) spec="$ch/$bw" ;;
-	esac
-	run chanspec "$spec"
-	log "chanspec $spec -> now $("$T" "$ifn" chanspec 2>/dev/null)"
 	;;
 esac
+# explicit chanspec: before hostapd (pre) and once more after the AP is up
+# (post); with the AP up the blob accepts the ioctl but keeps its chanspec
+# (bench), so the pre one is the one that matters.
+case "$bw" in
+20) spec="$ch" ;;
+40)
+	if [ "$band" = 2g ]; then
+		[ "$ch" -le 7 ] && spec="${ch}l" || spec="${ch}u"
+	else
+		[ $(( (ch / 4) % 2 )) -eq 1 ] && spec="${ch}l" || spec="${ch}u"
+	fi ;;
+*) spec="$ch/$bw" ;;
+esac
+run chanspec "$spec"
+log "$phase: bw_cap $band $mask, chanspec $spec -> now $("$T" "$ifn" chanspec 2>/dev/null), bw_cap now $("$T" "$ifn" bw_cap "$band" 2>/dev/null)"
 exit 0
