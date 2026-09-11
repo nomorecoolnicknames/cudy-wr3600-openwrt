@@ -16,28 +16,42 @@ behind a small open-source compatibility layer.
   the factory firmware stays in slot 2 for rollback; loader, U-Boot and board
   data are never written.
 * **Ethernet**: SoC switch (SF2 + SystemPort), 2.5G SerDes to the external
-  BCM53134 switch, all four wired ports (see limitations).
+  BCM53134 switch. The **WAN port works** (internal GPHY, vendor AFE/PLL
+  calibration): `eth0` = WAN, `eth1` = LAN1–4, bridged with both radios.
+  The board uses its **factory MAC addresses** (read from `bdinfo`), so an
+  ISP lease bound to the MAC keeps working.
 * **Wi-Fi**: both radios (2.4 GHz + 5 GHz, 2×2, 802.11ax) as access points,
   WPA2, clients get DHCP and NAT to the internet. 11be/MLO are not enabled yet.
 * **LuCI**, SSH, panel LEDs, watchdog-backed `reboot`, podkop/sing-box
   preinstalled (bring your own key).
+* **Settings persist** across reboots: the firmware keeps its own UBI volume
+  (`cudy66_data`, 4 MiB, UBIFS) as the overlay; the factory firmware's
+  `rootfs_data` is never touched. "Perform reset" in LuCI (`firstboot`)
+  empties it.
+* **`sysupgrade`** from LuCI ("Flash new firmware") or the shell with the
+  release's `cudy-wr3600-sysupgrade-<version>.tar`: A/B — the other slot is
+  written, verified and committed, the running one stays as fallback.
 * Reproducible build: two runs of `tools/build_release.sh` produce identical
   images.
 
 ## Limitations (this release)
 
-* The **physical WAN port does not link** (internal GPHY on SF2 port 0). All
-  wired ports act as one WAN interface: plug the uplink into any **LAN** port.
-  Wired LAN clients are not possible until the WAN/LAN split lands.
-* LAN for clients is Wi-Fi only: `192.168.10.1/24`, SSID `CudyWR3600`,
-  password `12345678`.
-* Settings live in RAM (tmpfs overlay): a reboot returns the box to the
-  defaults of the image. Persistent configuration is on the roadmap.
+* LAN: `192.168.10.1/24` on LAN1–4 and Wi-Fi (SSID `CudyWR3600`, password
+  `12345678`); the uplink goes into the **WAN** port.
+* The **first `sysupgrade` overwrites the factory firmware** in the other
+  slot (A/B needs it). After that the only way back to stock is Cudy's TFTP
+  recovery with the signed factory image. The manual updater
+  (`update-from-release.sh`) refuses to do this without `FORCE=1`.
+* Persistent settings, `sysupgrade` and the factory MAC are new in
+  2026-09-11 and are marked in `docs/RELEASE_CHECKLIST.md` (section I) with
+  their hardware-test status; read it before relying on them.
 * Wi-Fi is driven by static `hostapd` configs (`/etc/hostapd-wl0.conf`,
   `-wl1.conf`), not by LuCI's wireless page.
-* `root` has no password. Admin access from the wired side is limited to
-  private (RFC1918) source addresses by default — see `wan_admin` in
-  `/etc/config/wifi66`.
+* `root` password is `12345678` (deliberately predictable: the firmware is
+  installed and updated over Wi-Fi). Admin access from the WAN side is
+  limited to private (RFC1918) source addresses by default — see `wan_admin`
+  in `/etc/config/wifi66`. Change both passwords (`passwd`, `wpa_passphrase`
+  in `/etc/hostapd-wl*.conf`); they now survive a reboot.
 
 ## Install
 

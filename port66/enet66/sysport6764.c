@@ -29,6 +29,7 @@
 #include <linux/etherdevice.h>
 #include <linux/hrtimer.h>
 #include <linux/interrupt.h>
+#include <linux/mtd/mtd.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
@@ -37,8 +38,9 @@
 
 #include "enet6764.h"
 
-/* Fixed MAC. The stock U-Boot environment uses 02:10:18:00:00:01 for its own
- * interface; this one is deliberately different so both can be on the wire.
+/* Fallback MAC, only used if the factory one cannot be read. The stock U-Boot
+ * environment uses 02:10:18:00:00:01 for its own interface; this one is
+ * deliberately different so both can be on the wire.
  */
 static const u8 sp_mac_addr[ETH_ALEN] = { 0x02, 0x10, 0x18, 0x00, 0x00, 0x02 };
 
@@ -852,10 +854,86 @@ static const struct net_device_ops sp_netdev_ops = {
  * registered first so it becomes eth0 and LAN eth1, matching the stock
  * board-db (4lans1wan: ethernetWanPort='eth0').
  */
+/* Read the MAC the board was manufactured with. The stock DTB points at it:
+ *   mtd-mac-address = <&bdinfo 0xde00>;            (phandle + offset)
+ *   mtd-mac-address-increment = <1>;               (WAN port only)
+ * so the base address is the LAN MAC and the WAN one is base + 1, exactly the
+ * pair the factory firmware puts on the wire (verified: bdinfo+0xde00 holds
+ * d4:0d:ab:46:c4:54 on the bench board, and the stock reports ...:c4:55 on its
+ * WAN). Providers that bind a lease to the MAC therefore keep working.
+ *
+ * Shipping a made-up MAC is not acceptable in a release, but it must never
+ * prevent the router from booting either: every failure path falls back to the
+ * local address above.
+ */
+static int sp_read_mac_from_mtd(u32 phandle, u32 off, u8 *mac)
+{
+	struct device_node *part;
+	const char *label;
+	struct mtd_info *mtd;
+	size_t rd = 0;
+	int i, ret = -ENOENT;
+
+	part = of_find_node_by_phandle(phandle);
+	if (!part)
+		return -ENOENT;
+	label = of_get_property(part, "label", NULL);
+
+	for (i = 0; i < 16; i++) {
+		mtd = get_mtd_device(NULL, i);
+		if (IS_ERR(mtd))
+			break;
+		if (label && mtd->name && !strcmp(mtd->name, label)) {
+			ret = mtd_read(mtd, off, ETH_ALEN, &rd, mac);
+			put_mtd_device(mtd);
+			ret = (ret || rd != ETH_ALEN ||
+			       !is_valid_ether_addr(mac)) ? -EINVAL : 0;
+			break;
+		}
+		put_mtd_device(mtd);
+	}
+	of_node_put(part);
+	return ret;
+}
+
+static int sp_factory_mac(bool with_increment, u8 *mac)
+{
+	struct device_node *ports, *port;
+	const __be32 *prop;
+	u8 buf[ETH_ALEN];
+	int len, ret = -ENOENT;
+
+	for_each_node_by_name(ports, "ports") {
+		for_each_available_child_of_node(ports, port) {
+			u32 phandle, off, inc = 0;
+
+			prop = of_get_property(port, "mtd-mac-address", &len);
+			if (!prop || len < 8)
+				continue;
+			phandle = be32_to_cpup(prop);
+			off = be32_to_cpup(prop + 1);
+			of_property_read_u32(port, "mtd-mac-address-increment",
+					     &inc);
+			ret = sp_read_mac_from_mtd(phandle, off, buf);
+			if (ret)
+				continue;	/* the iterator drops the ref */
+			of_node_put(port);
+			if (with_increment)
+				buf[ETH_ALEN - 1] += inc;
+			memcpy(mac, buf, ETH_ALEN);
+			of_node_put(ports);
+			return 0;
+		}
+		of_node_put(ports);
+	}
+	return ret;
+}
+
 static int sp_register_netdev(struct sysport6764 *sp, int role, const u8 *mac)
 {
 	struct net_device *ndev;
 	struct sp_priv *priv;
+	u8 factory[ETH_ALEN];
 	int ret;
 
 	ndev = devm_alloc_etherdev(sp->dev, sizeof(*priv));
@@ -870,6 +948,14 @@ static int sp_register_netdev(struct sysport6764 *sp, int role, const u8 *mac)
 	priv->dest_map = 1u << (role == SP_ROLE_WAN ? SP_SPLIT_WAN_PORT :
 						      SP_SPLIT_LAN_PORT);
 
+	if (!sp_factory_mac(role == SP_ROLE_WAN, factory)) {
+		dev_info(sp->dev, "%s: factory MAC %pM\n",
+			 role == SP_ROLE_WAN ? "WAN" : "LAN", factory);
+		mac = factory;
+	} else {
+		dev_info(sp->dev, "%s: factory MAC unavailable, using %pM\n",
+			 role == SP_ROLE_WAN ? "WAN" : "LAN", mac);
+	}
 	eth_hw_addr_set(ndev, mac);
 	ndev->netdev_ops = &sp_netdev_ops;
 	ndev->watchdog_timeo = msecs_to_jiffies(2000);

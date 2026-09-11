@@ -47,7 +47,7 @@ rsync -a "${EXCL[@]}" "$R/bsp-6.6/compat/" "$DEST/bsp-6.6/compat/"
 
 say "tools"
 for t in build_release.sh clean_release_rootfs.sh make_source_tarball.sh \
-         make_public_repo.sh insmodf.c ubiwrite.c modvermagic.py modpvfix.py \
+         make_public_repo.sh insmodf.c ubiwrite.c ubimkvol.c modvermagic.py modpvfix.py \
          module_header_fix.py erom_decode.py; do
 	[ -f "$R/tools/$t" ] && cp "$R/tools/$t" "$DEST/tools/"
 done

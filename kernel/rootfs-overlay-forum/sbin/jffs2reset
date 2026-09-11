@@ -1,0 +1,45 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Cudy WR3600 port: replaces fstools' jffs2reset (and firstboot, which is the
+# same program). Those erase the UBI volume named "rootfs_data" - on this board
+# that is the FACTORY firmware's overlay, and wiping it would reset the stock
+# system's settings behind the user's back. The settings of this firmware live
+# in the volume cudy66_data, mounted on /overlay by /lib/preinit/80_mount_root;
+# a reset empties its upper directory (what fstools does when the overlay is
+# mounted) and, with -r, reboots.
+#
+#   jffs2reset [-y] [-r]       -y: do not ask, -r: reboot afterwards
+# LuCI's "Perform reset" runs "firstboot -r -y".
+
+yes=0; rb=0
+for a in "$@"; do
+	case "$a" in
+	-y) yes=1 ;;
+	-r) rb=1 ;;
+	-k|-i) ;;
+	*) echo "usage: $0 [-y] [-r]" >&2; exit 1 ;;
+	esac
+done
+
+if [ "$yes" != 1 ]; then
+	printf 'This will erase all settings and remove any installed packages. Are you sure? [N/y]\n'
+	read -r ans
+	case "$ans" in y|Y|yes|YES) ;; *) exit 0 ;; esac
+fi
+
+if grep -q ' /overlay ' /proc/mounts && [ -d /overlay/upper ]; then
+	dev=$(cat /tmp/.cudy-overlay-dev 2>/dev/null)
+	echo "/overlay${dev:+ ($dev)} is mounted, erasing files"
+	find /overlay/upper -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+	sync
+elif dev=$(for v in /sys/class/ubi/ubi*_*; do
+		[ "$(cat "$v/name" 2>/dev/null)" = cudy66_data ] && echo "/dev/$(basename "$v")"; done | head -n1); [ -n "$dev" ]; then
+	echo "$dev is not mounted, erasing the volume"
+	/usr/bin/ubiwrite --wipe "$dev" || exit 1
+else
+	echo "no persistent settings volume, nothing to erase"
+fi
+
+[ "$rb" = 1 ] && { sync; sleep 1; reboot; }
+exit 0

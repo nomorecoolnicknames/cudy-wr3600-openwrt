@@ -43,9 +43,13 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 # Which slot are we running from? The mounted squashfs is the only reliable
 # answer - U-Boot's bootargs named the committed slot even when the preinit
-# had fallen back to the other one (verified on hardware).
+# had fallen back to the other one (verified on hardware). The preinit writes
+# the device to /tmp/.cudy-rootdev because inside sysupgrade's ramfs neither
+# /rom nor the squashfs root is in /proc/mounts any more.
 # ---------------------------------------------------------------------------
-ROOTDEV=$(awk '$2 == "/rom" { print $1 }' /proc/mounts)
+ROOTDEV=$(cat /tmp/.cudy-rootdev 2>/dev/null)                       # written by the preinit
+[ -n "$ROOTDEV" ] || ROOTDEV=$(awk '$2 == "/rom" { print $1 }' /proc/mounts)
+[ -n "$ROOTDEV" ] || ROOTDEV=$(awk '$2 == "/" && $3 == "squashfs" { print $1 }' /proc/mounts)
 case "$ROOTDEV" in
 *ubiblock0_4*) RUN=1 ;;
 *ubiblock0_6*) RUN=2 ;;

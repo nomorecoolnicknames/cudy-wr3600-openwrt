@@ -39,8 +39,34 @@ int main(int argc, char **argv)
 	ssize_t n;
 	int64_t total;
 
+	/* --wipe <dev>: a zero-length volume update erases the volume, which is
+	 * how the sysupgrade "do not keep settings" path clears the persistent
+	 * overlay (UBIFS then formats the empty volume again on the next boot). */
+	if (argc == 3 && !strcmp(argv[1], "--wipe")) {
+		int64_t zero = 0;
+
+		dev = argv[2];
+		fdout = open(dev, O_RDWR);
+		if (fdout < 0) {
+			fprintf(stderr, "ubiwrite: open %s: %s\n", dev, strerror(errno));
+			return 1;
+		}
+		if (ioctl(fdout, UBI_IOCVOLUP, &zero) < 0) {
+			fprintf(stderr, "ubiwrite: wipe %s: %s\n", dev, strerror(errno));
+			close(fdout);
+			return 1;
+		}
+		if (close(fdout) < 0) {
+			fprintf(stderr, "ubiwrite: close %s: %s\n", dev, strerror(errno));
+			return 1;
+		}
+		printf("ubiwrite: %s wiped\n", dev);
+		return 0;
+	}
+
 	if (argc != 3) {
-		fprintf(stderr, "usage: %s <volume-device> <file>\n", argv[0]);
+		fprintf(stderr, "usage: %s <volume-device> <file>\n"
+				"       %s --wipe <volume-device>\n", argv[0], argv[0]);
 		return 2;
 	}
 	dev = argv[1];

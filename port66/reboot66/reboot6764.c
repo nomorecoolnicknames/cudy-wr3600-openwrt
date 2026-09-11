@@ -121,6 +121,11 @@ static void __exit reboot6764_exit(void)
 	unregister_restart_handler(&bcm6764_restart_nb);
 	if (wdt_base)
 		iounmap(wdt_base);
+	if (wdt_clk) {
+		clk_disable_unprepare(wdt_clk);
+		clk_put(wdt_clk);
+		wdt_clk = NULL;
+	}
 }
 
 module_init(reboot6764_init);

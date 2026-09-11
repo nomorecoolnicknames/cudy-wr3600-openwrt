@@ -58,7 +58,7 @@ rsync -a \
 say "build scripts"
 cp "$R/tools/build_release.sh" "$R/tools/clean_release_rootfs.sh" \
    "$R/tools/make_source_tarball.sh" "$R/tools/insmodf.c" \
-   "$R/tools/ubiwrite.c" "$W/tools/"
+   "$R/tools/ubiwrite.c" "$R/tools/ubimkvol.c" "$W/tools/"
 
 say "documentation"
 cp "$R/docs/SOURCE_README.md" "$W/README.md"

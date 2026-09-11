@@ -1,0 +1,126 @@
+#!/bin/sh
+# Copyright (C) 2006 OpenWrt.org
+# Copyright (C) 2010 Vertical Communications
+#
+# Cudy WR3600 port: mount a PERSISTENT overlay.
+#
+# fstools' mount_root looks for the UBI volume named "rootfs_data" - on this
+# board that volume EXISTS and belongs to the factory firmware (its jffs2
+# overlay). With UBIFS in the kernel mount_root would pick it, fail to mount it
+# as UBIFS and leave the system without any writable layer at all (its start()
+# ignores the error), so mount_root is not used here. The release keeps its own
+# volume, cudy66_data (created by ubimkvol on the first boot; UBIFS formats an
+# empty volume on the first mount), and this script assembles the overlay the
+# way libfstools does: the overlay is mounted on /mnt and made the root with
+# pivot_root, which re-roots every process including procd. Mounting an overlay
+# directly on top of / does NOT work - the mount is invisible to running
+# processes (verified on the build host).
+#
+# Failure order: UBIFS volume -> tmpfs overlay (settings in RAM, as in the
+# releases before 2026-09-11) -> mount_root start. A broken volume therefore
+# never makes the router unbootable.
+
+CUDY_VOL_NAME=cudy66_data
+CUDY_VOL_BYTES=4194304
+
+cudy_log() {
+	echo "cudy66: $*" > /dev/kmsg 2>/dev/null
+}
+
+find_cudy_vol() {
+	local v
+	for v in /sys/class/ubi/ubi*_*; do
+		[ -f "$v/name" ] || continue
+		[ "$(cat "$v/name" 2>/dev/null)" = "$CUDY_VOL_NAME" ] || continue
+		echo "/dev/$(basename "$v")"
+		return 0
+	done
+	return 1
+}
+
+# mount the persistent volume on /overlay; 1 = not available
+cudy_mount_volume() {
+	local dev
+
+	dev="$(find_cudy_vol)" || {
+		ubimkvol ubi0 "$CUDY_VOL_NAME" "$CUDY_VOL_BYTES" >/dev/null 2>&1
+		dev="$(find_cudy_vol)" || return 1
+	}
+	grep -q ' ubifs$' /proc/filesystems || return 1
+	mount -t ubifs -o rw,noatime "$dev" /overlay 2>/dev/null || return 1
+	# must be writable, or it is useless as an upper layer
+	if ! touch /overlay/.cudy66 2>/dev/null; then
+		umount /overlay 2>/dev/null
+		return 1
+	fi
+	rm -f /overlay/.cudy66
+	echo "$dev" > /tmp/.cudy-overlay-dev 2>/dev/null
+	return 0
+}
+
+# libfstools fopivot()+pivot(): overlay on /mnt, then pivot_root
+cudy_pivot_overlay() {
+	mkdir -p /overlay/upper /overlay/work || return 1
+	mount -t overlay -o noatime,lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work \
+		overlayfs:/overlay /mnt || return 1
+	mount -o noatime,move /proc /mnt/proc || {
+		umount /mnt 2>/dev/null
+		return 1
+	}
+	pivot_root /mnt /mnt/rom || {
+		mount -o noatime,move /mnt/proc /proc
+		umount /mnt 2>/dev/null
+		return 1
+	}
+	mount -o noatime,move /rom/dev /dev
+	mount -o noatime,move /rom/tmp /tmp
+	mount -o noatime,move /rom/sys /sys
+	mount -o noatime,move /rom/overlay /overlay
+	return 0
+}
+
+mount_cudy_overlay() {
+	local rootdev
+
+	rootdev="$(awk '$2 == "/" { print $1; exit }' /proc/mounts)"
+	[ -n "$rootdev" ] || return 1
+	# The updater needs to know which slot is running; in sysupgrade's ramfs
+	# /rom and / are gone from /proc/mounts, but /tmp is moved along, so the
+	# answer is recorded here. procd mounts /tmp before the preinit runs; the
+	# guard is for a system that is booted some other way.
+	grep -q ' /tmp tmpfs ' /proc/mounts || {
+		mount -t tmpfs -o mode=755,noatime tmpfs /tmp || return 1
+	}
+	echo "$rootdev" > /tmp/.cudy-rootdev 2>/dev/null
+
+	if cudy_mount_volume; then
+		if cudy_pivot_overlay; then
+			cudy_log "persistent overlay mounted ($(cat /tmp/.cudy-overlay-dev))"
+			return 0
+		fi
+		umount /overlay 2>/dev/null
+		cudy_log "persistent overlay: pivot failed"
+	else
+		cudy_log "no usable $CUDY_VOL_NAME volume"
+	fi
+	rm -f /tmp/.cudy-overlay-dev
+
+	# settings in RAM, as before
+	mount -t tmpfs -o mode=0755,noatime tmpfs /overlay || return 1
+	if cudy_pivot_overlay; then
+		cudy_log "tmpfs overlay mounted, settings will NOT survive a reboot"
+		return 0
+	fi
+	umount /overlay 2>/dev/null
+	return 1
+}
+
+do_mount_root() {
+	mount_cudy_overlay || {
+		cudy_log "falling back to mount_root"
+		mount_root start "$(compose_rootfs_mount_options)"
+	}
+	boot_run_hook preinit_mount_root
+}
+
+[ "$INITRAMFS" = "1" ] || boot_hook_add preinit_main do_mount_root

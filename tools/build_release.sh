@@ -83,6 +83,17 @@ echo "kernel bld: $KB -> $KBR"
 say "1/8 release kernel build tree"
 # A copy keeps the tested build dir untouched; only INITRAMFS_SOURCE changes.
 rsync -a --delete "$KB/" "$KBR/"
+# The kernel configuration comes from the file in the repository, not from the
+# tested build dir: the two drifted once (UBIFS enabled in the file, absent in
+# the build dir, and so absent in the image built from it).
+KCONF=$R/kernel-6.6/port/config-6.6.93-bcm96764-shim
+cp "$KCONF" "$KBR/.config"
+make -C "$SRC" O="$KBR" ARCH=arm CROSS_COMPILE="$TC" -s olddefconfig >/dev/null
+for o in UBIFS_FS OVERLAY_FS MTD_UBI_BLOCK SQUASHFS TMPFS; do
+	grep -q "^CONFIG_$o=y" "$KBR/.config" || die "release kernel config lacks CONFIG_$o=y"
+done
+diff -q "$KCONF" "$KBR/.config" >/dev/null || \
+	echo "note: olddefconfig changed the config; diff $KCONF $KBR/.config"
 make -C "$SRC" O="$KBR" ARCH=arm CROSS_COMPILE="$TC" -s prepare >/dev/null
 
 # ---------------------------------------------------------------------------
@@ -195,6 +206,11 @@ rsync -a --exclude 'etc/uci-defaults/' "$STAGE_BASE/" "$W/rootfs/"
 
 KM=$W/rootfs/lib/modules/6.6.93
 mkdir -p "$KM" "$W/rootfs/lib/modules/blobs" "$W/rootfs/usr/bin"
+# The OpenWrt armsr rootfs ships kmods built for a different config: different
+# vermagic and symbol CRCs, so they can never load into this kernel. Drop the
+# lot and ship only modules built by this tree (the sanity check below then
+# guarantees that everything wifi66 loads is present).
+rm -f "$KM"/*.ko
 cp "$KBR"/net/wireless/cfg80211.ko \
    "$KBR"/net/netfilter/*.ko "$KBR"/net/ipv4/netfilter/*.ko \
    "$KBR"/net/ipv6/netfilter/*.ko "$KBR"/net/llc/llc.ko \
@@ -226,6 +242,11 @@ file "$W/ubiwrite" | grep -q 'ARM' || die "ubiwrite is not an ARM binary"
 cp "$W/ubiwrite" "$W/rootfs/usr/bin/ubiwrite"
 chmod 0755 "$W/rootfs/usr/bin/ubiwrite"
 cp "$W/ubiwrite" "$REL/ubiwrite"
+# ubimkvol: the preinit creates the persistent-settings volume with it
+"${TC}gcc" -static -Os -s -o "$W/ubimkvol" "$R/tools/ubimkvol.c"
+file "$W/ubimkvol" | grep -q 'ARM' || die "ubimkvol is not an ARM binary"
+cp "$W/ubimkvol" "$W/rootfs/usr/bin/ubimkvol"
+chmod 0755 "$W/rootfs/usr/bin/ubimkvol"
 # Bootloader slot metadata blobs (COMMITTED=1|2 + CRC32, exactly what
 # bcm_bootstate writes) and the in-place updater. The updater writes the OTHER
 # slot and needs the blob for it, so both live in the image; they are also
@@ -258,7 +279,7 @@ source=cudy-wr3600-6.6-src-$VER
 kernel=6.6.93
 openwrt=24.10.2
 target=armsr/armv7
-wired=eth0 (all switch ports, WAN role)
+wired=eth0 WAN (SF2 P0, internal GPHY) + eth1 LAN1-4 (split=1)
 wifi=stock wl.ko (Broadcom 4.19 blob) via bcm_shim
 built=$BUILT_UTC
 EOF
@@ -378,6 +399,18 @@ say "8/8 checksums"
 ( cd "$REL" && sha256sum bootfs-release.itb rootfs-forum.sq bundle-forum.itb \
 	> SHA256SUMS )
 cat "$REL/SHA256SUMS"
+
+# sysupgrade / LuCI "Flash firmware" image: /lib/upgrade/platform.sh in the
+# rootfs expects a tar with the two volumes and their own checksums (the global
+# SHA256SUMS above also covers the recovery bundle, which an upgrade must not
+# need).
+SYS="$W/sysupgrade"
+rm -rf "$SYS"; mkdir -p "$SYS"
+cp "$REL/bootfs-release.itb" "$REL/rootfs-forum.sq" "$SYS/"
+( cd "$SYS" && sha256sum bootfs-release.itb rootfs-forum.sq > SHA256SUMS )
+( cd "$SYS" && tar -cf "$REL/cudy-wr3600-sysupgrade-$VER.tar" 	bootfs-release.itb rootfs-forum.sq SHA256SUMS )
+echo "sysupgrade image: $(ls -la "$REL/cudy-wr3600-sysupgrade-$VER.tar" | awk '{print $5" bytes"}')"
+
 ls -la "$REL"
 echo
 echo "RELEASE_BUILD_DONE"
