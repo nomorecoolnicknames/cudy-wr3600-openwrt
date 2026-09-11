@@ -228,6 +228,17 @@ static DEFINE_MUTEX(wiphy419_mutex);
 static struct cfg80211_ops shim_stripped_ops;
 static bool wiphy_trace;
 module_param(wiphy_trace, bool, 0600);
+/* The blob registers its bands with ht_supported/vht_supported = false (its
+ * own hostapd never looked at them; width and HE/EHT are set through the
+ * driver's iovars, see usr/sbin/wl66-chan). OpenWrt's iwinfo and LuCI build
+ * the channel-width list from exactly these capabilities, so with the blob's
+ * values the Wireless page offers nothing but 20 MHz. Advertise what the
+ * hardware does (2x2, HT40 on 2.4 GHz, VHT up to 160 MHz on 5 GHz) unless
+ * the blob already filled the fields. hostapd is kept at ieee80211n=0 by the
+ * netifd driver script, so the operating width still comes from the iovars. */
+static bool wiphy_synth_caps = true;
+module_param(wiphy_synth_caps, bool, 0600);
+MODULE_PARM_DESC(wiphy_synth_caps, "advertise HT/VHT band capabilities the blob leaves empty (default 1)");
 #define WTRACE(fmt, ...) do { if (wiphy_trace) \
 	pr_info("bcm_shim: H30_WIPHY " fmt "\n", ##__VA_ARGS__); } while (0)
 
@@ -770,6 +781,36 @@ static int wiphy419_publish_band(struct wiphy419_entry *entry, const u8 *b)
 	/* ht/vht caps are layout-identical (22/16 B, asserted at init). */
 	memcpy(&nb->ht_cap, b + WP419_O_BAND_HT, WP419_SZ_STA_HT);
 	memcpy(&nb->vht_cap, b + WP419_O_BAND_VHT, WP419_SZ_STA_VHT);
+	if (wiphy_synth_caps && !is_6g && band != NL80211_BAND_60GHZ) {
+		if (!nb->ht_cap.ht_supported) {
+			memset(&nb->ht_cap, 0, sizeof(nb->ht_cap));
+			nb->ht_cap.ht_supported = true;
+			nb->ht_cap.cap = IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+					 IEEE80211_HT_CAP_SGI_20 |
+					 IEEE80211_HT_CAP_SGI_40 |
+					 IEEE80211_HT_CAP_MAX_AMSDU;
+			if (band == NL80211_BAND_2GHZ)
+				nb->ht_cap.cap |= IEEE80211_HT_CAP_DSSSCCK40;
+			nb->ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
+			nb->ht_cap.ampdu_density = IEEE80211_HT_MPDU_DENSITY_8;
+			nb->ht_cap.mcs.rx_mask[0] = 0xff;	/* 2 spatial streams */
+			nb->ht_cap.mcs.rx_mask[1] = 0xff;
+			nb->ht_cap.mcs.tx_params = IEEE80211_HT_MCS_TX_DEFINED;
+		}
+		if (band == NL80211_BAND_5GHZ && !nb->vht_cap.vht_supported) {
+			memset(&nb->vht_cap, 0, sizeof(nb->vht_cap));
+			nb->vht_cap.vht_supported = true;
+			nb->vht_cap.cap = IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454 |
+					  IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160MHZ |
+					  IEEE80211_VHT_CAP_SHORT_GI_80 |
+					  IEEE80211_VHT_CAP_SHORT_GI_160 |
+					  IEEE80211_VHT_CAP_RXSTBC_1 |
+					  (7 << IEEE80211_VHT_CAP_MAX_A_MPDU_LENGTH_EXPONENT_SHIFT);
+			/* MCS 0-9 on 2 streams, "not supported" (3) on 3..8 */
+			nb->vht_cap.vht_mcs.rx_mcs_map = cpu_to_le16(0xfffa);
+			nb->vht_cap.vht_mcs.tx_mcs_map = cpu_to_le16(0xfffa);
+		}
+	}
 	if (is_6g && (nb->ht_cap.ht_supported || nb->vht_cap.vht_supported)) {
 		/* 6.6 register -EINVALs HT/VHT on 6G (spec: 6G is HE-only;
 		 * the 4.19 tree had no such gate, so strip defensively —
