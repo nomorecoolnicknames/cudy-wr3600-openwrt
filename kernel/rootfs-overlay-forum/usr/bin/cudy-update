@@ -19,7 +19,9 @@ REPO=${CUDY_REPO:-nomorecoolnicknames/cudy-wr3600-openwrt}
 API="https://api.github.com/repos/$REPO/releases/latest"
 STATUS=/tmp/cudy-update.status
 TAR=/tmp/cudy-update.tar
-CURL="curl -fsSL -m 40 -A cudy-update/1"
+# connect timeouts are short and retried: a GitHub connect once took 134 s
+# to fail on the bench while the next attempt connected in 50 ms
+CURL="curl -fsSL --connect-timeout 20 --retry 3 --retry-delay 5 --retry-all-errors -m 60 -A cudy-update/1"
 
 cur_version() { sed -n 's/^version=//p' /etc/cudy-release 2>/dev/null | head -n1; }
 jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
@@ -97,7 +99,8 @@ do_install() { # runs detached
 	fi
 	status downloading "downloading $LATEST ($(( ${SIZE:-0} / 1048576 )) MB)" 10
 	rm -f "$TAR"
-	$CURL -m 900 -o "$TAR" "$TARURL" || { status error "download failed"; rm -f "$TAR"; return 1; }
+	$CURL -m 900 -o "$TAR" "$TARURL" 2>/tmp/cudy-update.err || {
+		status error "download failed: $(tail -c 200 /tmp/cudy-update.err | tr -d '\n')"; rm -f "$TAR"; return 1; }
 	if [ -n "$SHAURL" ]; then
 		status verifying "verifying sha256" 60
 		want=$($CURL "$SHAURL" | cut -c1-64)
