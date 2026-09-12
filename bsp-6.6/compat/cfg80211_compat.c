@@ -2,7 +2,7 @@
 /*
  * cfg80211_compat.c - cfg80211_ops 4.19 -> 6.6 translation for stock wl.ko
  *
- * Lane D of SHIM_WORKPLAN.md (sub-agent A). The stock wl.ko blob was built
+ * Lane D of SHIM_WORKPLAN.md . The stock wl.ko blob was built
  * against a Broadcom BCA 4.19 tree: its cfg80211_ops table has 106 entries
  * and every op from add_key on is shifted by +2..+4 versus kernel 6.6
  * (124 entries with TESTMODE, 122 without). Registering the blob table

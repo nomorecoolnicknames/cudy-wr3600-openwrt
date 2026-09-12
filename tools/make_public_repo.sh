@@ -105,6 +105,11 @@ if [ -n "$bad" ]; then
 	echo "PERSONAL DATA in public tree:"; echo "$bad"; exit 1
 fi
 echo "sizes: $(du -sh "$DEST" | cut -f1), files: $(find "$DEST" -type f ! -path '*/.git/*' | wc -l)"
+# commits in the public tree are made by the project owner, not the build user
+[ -d "$DEST/.git" ] && {
+	git -C "$DEST" config user.name nomorecoolnicknames
+	git -C "$DEST" config user.email 78512247+nomorecoolnicknames@users.noreply.github.com
+}
 echo
 echo "next:"
 echo "  cd $DEST && git init -b main 2>/dev/null; git add -A && git commit -m 'release $VER'"

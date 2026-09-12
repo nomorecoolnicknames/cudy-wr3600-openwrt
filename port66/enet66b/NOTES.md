@@ -344,7 +344,7 @@ forever (`sw_hw_ready`, the software-reset wait) the port bounds it at ~1 s.
   `sw_setup()`, then re-enables them in `sw_open()`. Looks redundant;
   reproduced as-is.
 * **`bcm96764_mark()` re-entrancy.** The marker channel is a single 8-bit
-  field in the reset-reason register, so a marker emitted by the other agent's
+  field in the reset-reason register, so a marker emitted by another session's
   SoC driver at the same time will overwrite ours. Load the modules
   sequentially, not in parallel.
 

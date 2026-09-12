@@ -2,7 +2,7 @@
 /*
  * cfg80211_compat.h - 4.19 ABI mirrors for stock wl.ko on kernel 6.6.93
  *
- * Sub-agent A (lane D of SHIM_WORKPLAN.md): cfg80211_ops translation
+ * Lane D of SHIM_WORKPLAN.md: cfg80211_ops translation
  * 4.19-layout -> 6.6-layout for the proprietary stock wl.ko blob
  * (radio/wl.ko, 4.19.294, fullmac, BCM6764).
  *

@@ -1938,7 +1938,7 @@ extern void bcm_dev_hold(struct net_device *dev);
 extern void bcm_dev_put(struct net_device *dev);
 
 /* Lookup-bridge selftest (P0 vendor30 netdev-lookup lane, no radio).
- * Runs under the existing netdev_lifecycle_selftest gate; Codex runs it on
+ * Runs under the existing netdev_lifecycle_selftest gate; run it on
  * hardware with the same `wiphy netdev` groups, no runner changes.
  *
  * Fixture: one registered view ("h11lk%d" via the H11 test alloc path, so
