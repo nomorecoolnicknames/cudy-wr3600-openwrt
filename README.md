@@ -6,7 +6,7 @@ router that has no upstream OpenWrt support. Wi-Fi works through the device's
 own Broadcom `wl.ko` driver (built for the vendor's 4.19 kernel) running on 6.6
 behind a small open-source compatibility layer.
 
-Русская инструкция по установке и обновлению: [`tools/install/README.md`](tools/install/README.md).
+Русская инструкция по установке и обновлению: [`INSTALL.md`](INSTALL.md).
 Обсуждение и поддержка — тема на 4PDA
 «[Cudy WR3600 и WR3600H – обсуждение](https://4pda.to/forum/index.php?showtopic=1103718)».
 
@@ -64,8 +64,8 @@ behind a small open-source compatibility layer.
 
 ## Install
 
-Three ways, none of them needs UART, TFTP or the bootloader — see
-[`tools/install/README.md`](tools/install/README.md). The short version, from
+Four ways, none of them needs UART, TFTP or the bootloader — see
+[`INSTALL.md`](INSTALL.md) (Russian). The short version, from
 your computer (Python 3 + OpenSSH):
 
 ```sh

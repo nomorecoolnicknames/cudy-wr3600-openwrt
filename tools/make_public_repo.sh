@@ -58,7 +58,8 @@ cp "$R/tools/install/"*.py "$R/tools/install/"*.sh "$R/tools/install/"*.md "$DES
 say "documentation"
 cp "$R/docs/PUBLIC_README.md" "$DEST/README.md"
 cp "$R/release/SHA256SUMS" "$DEST/release/"
-# no docs/ in the public tree: README.md + tools/install/README.md are the docs
+# no docs/ in the public tree: README.md + INSTALL.md (Russian install/update guide)
+cp "$R/tools/install/README.md" "$DEST/INSTALL.md"
 
 cat > "$DEST/LICENSE" <<'EOF'
 This repository is licensed under the GNU General Public License, version 2
