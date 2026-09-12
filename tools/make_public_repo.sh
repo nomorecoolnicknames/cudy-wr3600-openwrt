@@ -30,7 +30,8 @@ EXCL=(--exclude '*.ko' --exclude '*.o' --exclude '*.mod' --exclude '*.mod.c'
 mkdir -p "$DEST"
 # keep .git if the tree already exists (incremental updates), replace the rest
 find "$DEST" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-mkdir -p "$DEST"/{kernel/port,port66,bsp-6.6/compat,tools/install,docs,release}
+mkdir -p "$DEST"/{kernel/port,port66,bsp-6.6/compat,tools/install,release}
+rm -rf "$DEST/docs"
 
 say "kernel side"
 cp "$R/kernel-6.6/build.sh" "$R/kernel-6.6/initramfs.list" "$DEST/kernel/"
@@ -56,24 +57,8 @@ cp "$R/tools/install/"*.py "$R/tools/install/"*.sh "$R/tools/install/"*.md "$DES
 
 say "documentation"
 cp "$R/docs/PUBLIC_README.md" "$DEST/README.md"
-cp "$R/tools/install/README.md" "$DEST/docs/INSTALL.ru.md"
-cp "$R/docs/SOURCE_README.md" "$DEST/docs/"
-cp "$R/docs/ROADMAP.md" "$DEST/docs/"
-cp "$R/docs/RELEASE_CHECKLIST.md" "$DEST/docs/"
-[ -f "$R/docs/RELEASE_CODE_REVIEW.md" ] && cp "$R/docs/RELEASE_CODE_REVIEW.md" "$DEST/docs/"
-cp "$R/BUILD_GUIDE.md" "$DEST/docs/BUILD_GUIDE.md"
-cp "$R/WIFI_CORE_MAP.md" "$DEST/docs/HARDWARE_RADIO.md"
-cp "$R/release/RELEASE_NOTES.md" "$DEST/docs/"
-cp "$R/release/ROOTFS_PACKAGES.md" "$DEST/docs/"
 cp "$R/release/SHA256SUMS" "$DEST/release/"
-[ -f "$R/docs/4PDA_POST.txt" ] && cp "$R/docs/4PDA_POST.txt" "$DEST/docs/"
-# Wi-Fi research reports (our own analysis of the stock firmware; bench MAC and
-# host paths scrubbed)
-mkdir -p "$DEST/docs/wifi-width"
-for f in STOCK_WIFI_BRINGUP.md WL_IOCTL_SPEC.md; do
-	[ -f "$R/triaging/wifi-width/$f" ] && sed -E 's#/home/[a-z0-9_]+/cudy_be3600/#<repo>/#g; s/d4:0d:ab:46:c4:5[0-9a-f]/xx:xx:xx:xx:xx:xx/g' \
-		"$R/triaging/wifi-width/$f" > "$DEST/docs/wifi-width/$f"
-done
+# no docs/ in the public tree: README.md + tools/install/README.md are the docs
 
 cat > "$DEST/LICENSE" <<'EOF'
 This repository is licensed under the GNU General Public License, version 2

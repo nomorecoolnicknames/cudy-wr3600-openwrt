@@ -6,7 +6,7 @@ router that has no upstream OpenWrt support. Wi-Fi works through the device's
 own Broadcom `wl.ko` driver (built for the vendor's 4.19 kernel) running on 6.6
 behind a small open-source compatibility layer.
 
-Русская инструкция по установке: [`docs/INSTALL.ru.md`](docs/INSTALL.ru.md).
+Русская инструкция по установке и обновлению: [`tools/install/README.md`](tools/install/README.md).
 Обсуждение и поддержка — тема на 4PDA
 «[Cudy WR3600 и WR3600H – обсуждение](https://4pda.to/forum/index.php?showtopic=1103718)».
 
@@ -47,8 +47,7 @@ behind a small open-source compatibility layer.
   recovery with the signed factory image. The manual updater
   (`update-from-release.sh`) refuses to do this without `FORCE=1`.
 * Persistent settings, `sysupgrade`, factory MACs and LuCI Wi-Fi are new in
-  2026-09-11 and were verified on one board (`docs/RELEASE_CHECKLIST.md`,
-  sections I and J).
+  2026-09-11/12 and were verified on one board.
 * Changing Wi-Fi settings reboots the router (~2 min): the blob cannot tear an
   AP down in place (it hangs the SoC), so the driver script reboots instead.
 * Wi-Fi is configured from LuCI → Network → Wireless (netifd driver script
@@ -91,13 +90,12 @@ Firmware files and checksums are on the
 | `port66/reboot66` | watchdog-based restart (PSCI SYSTEM_RESET hangs this SoC) |
 | `port66/shim66`, `bsp-6.6/compat` | `bcm_shim`: the 4.19 → 6.6 compatibility layer for `wl.ko` |
 | `tools/` | release build, rootfs cleaning, module patching, `insmodf`, `ubiwrite`, installers |
-| `docs/` | release notes, checklist, roadmap, hardware notes |
 
 ## Building
 
-`docs/SOURCE_README.md` describes the inputs (vanilla 6.6.93, the vendor GPL
-toolchain, an OpenWrt 24.10.2 armsr/armv7 rootfs, the blobs from your own
-device) and the steps; `tools/build_release.sh` does the whole thing.
+Build inputs: vanilla Linux 6.6.93, the vendor GPL toolchain, an OpenWrt
+24.10.2 armsr/armv7 rootfs and the Wi-Fi blobs from your own device;
+`tools/build_release.sh` does the whole thing (see its header).
 
 ## Licensing
 
@@ -109,6 +107,5 @@ LuCI keep their own licenses.
 
 ## Roadmap
 
-`docs/ROADMAP.md` — including what an open-source replacement for the Wi-Fi
-blob would take (the radios are a standard Broadcom AXI backplane: D11 MAC rev
+Planned: an open-source replacement for the Wi-Fi blob (the radios are a standard Broadcom AXI backplane: D11 MAC rev
 139/140, PHY rev 138/136; enumeration and power-up are already open).
