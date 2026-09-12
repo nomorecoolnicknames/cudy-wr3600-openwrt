@@ -47,6 +47,7 @@ import os
 import re
 import secrets
 import socket
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -297,6 +298,43 @@ class Ssh:
             die("scp failed: %s" % r.stderr.strip())
 
 
+def to_stock(a):
+    """Switch back to the factory firmware from OUR firmware (root SSH on port
+    22, password auth). Uses /usr/bin/cudy-update on the router when present
+    (2026-09-12+), otherwise writes the slot metadata itself."""
+    which_or_die("ssh")
+    if not port_open(a.router, 22):
+        die("%s:22 does not answer - is the router running this firmware? "
+            "(on the factory firmware there is nothing to switch)" % a.router)
+    base = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR", "-o", "PreferredAuthentications=password",
+            "-o", "PubkeyAuthentication=no", "-p", "22", "root@" + a.router]
+    if shutil.which("sshpass"):
+        cmd = ["sshpass", "-p", a.root_password, "ssh"] + base
+    else:
+        say("no sshpass on this computer: type the router's root password when asked")
+        cmd = ["ssh"] + base
+    force = "--force" if a.force else ""
+    remote = r"""
+if [ -x /usr/bin/cudy-update ]; then exec /usr/bin/cudy-update to-stock %s; fi
+dev=$(cat /tmp/.cudy-rootdev 2>/dev/null); [ -n "$dev" ] || dev=$(awk '$2=="/rom"{print $1}' /proc/mounts)
+case "$dev" in *ubiblock0_4*) run=1;; *ubiblock0_6*) run=2;; *) echo "cannot tell the running slot"; exit 1;; esac
+other=$((3-run)); [ $other = 1 ] && blk=/dev/ubiblock0_4 || blk=/dev/ubiblock0_6
+mkdir -p /tmp/ts; mount -t squashfs -o ro $blk /tmp/ts 2>/dev/null || { echo "slot $other is empty"; exit 1; }
+if [ -f /tmp/ts/etc/cudy-release ] && [ -z "%s" ]; then umount /tmp/ts; echo "slot $other is not the factory firmware (--force to boot it anyway)"; exit 1; fi
+umount /tmp/ts
+ubiwrite /dev/ubi0_1 /usr/share/cudy/meta-committed$other.bin >/dev/null && ubiwrite /dev/ubi0_2 /usr/share/cudy/meta-committed$other.bin >/dev/null || { echo "metadata write failed"; exit 1; }
+sync; echo "slot $other is now the boot slot, rebooting"; ( sleep 2; reboot ) >/dev/null 2>&1 &
+""" % (force, force)
+    r = subprocess.run(cmd + [remote], capture_output=True, text=True, timeout=120)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode != 0:
+        die("router said: " + out)
+    say(out)
+    say("in about two minutes the factory firmware answers at 192.168.10.1")
+    return 0
+
+
 def which_or_die(prog):
     from shutil import which
     if not which(prog):
@@ -318,7 +356,16 @@ def main():
     ap.add_argument("--key", help="use this private key instead of generating one")
     ap.add_argument("--skip-ssh-setup", action="store_true",
                     help="root SSH on port 2222 is already up (with --key)")
+    ap.add_argument("--to-stock", action="store_true",
+                    help="the router runs THIS firmware: make the factory slot the boot slot and reboot")
+    ap.add_argument("--root-password", default="12345678",
+                    help="root password of this firmware for --to-stock (default 12345678)")
+    ap.add_argument("--force", action="store_true",
+                    help="with --to-stock: boot the other slot even if it is not the factory firmware")
     a = ap.parse_args()
+
+    if a.to_stock:
+        return to_stock(a)
 
     for p in ("ssh", "scp", "ssh-keygen"):
         which_or_die(p)

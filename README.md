@@ -28,6 +28,10 @@ behind a small open-source compatibility layer.
   (`cudy66_data`, 4 MiB, UBIFS) as the overlay; the factory firmware's
   `rootfs_data` is never touched. "Perform reset" in LuCI (`firstboot`)
   empties it.
+* **Updates from LuCI**: System → Firmware update (GitHub) checks this
+  repository's releases, installs the latest into the other slot and offers
+  the way back to the factory firmware (`cudy-update` on the router,
+  `cudy-install.py --to-stock` from a PC).
 * **`sysupgrade`** from LuCI ("Flash new firmware") or the shell with the
   release's `cudy-wr3600-sysupgrade-<version>.tar`: A/B — the other slot is
   written, verified and committed, the running one stays as fallback.
@@ -45,6 +49,8 @@ behind a small open-source compatibility layer.
 * Persistent settings, `sysupgrade`, factory MACs and LuCI Wi-Fi are new in
   2026-09-11 and were verified on one board (`docs/RELEASE_CHECKLIST.md`,
   sections I and J).
+* Changing Wi-Fi settings reboots the router (~2 min): the blob cannot tear an
+  AP down in place (it hangs the SoC), so the driver script reboots instead.
 * Wi-Fi is configured from LuCI → Network → Wireless (netifd driver script
   `lib/netifd/wireless/mac80211.sh`, one AP per radio, no guest/mesh/STA).
   Channel width (up to 160 MHz on 5 GHz, 40 on 2.4), 11ax and 11be are set

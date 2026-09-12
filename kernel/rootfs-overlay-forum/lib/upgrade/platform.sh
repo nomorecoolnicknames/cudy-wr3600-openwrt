@@ -33,6 +33,26 @@ cudy_vol_dev() {
 	return 1
 }
 
+# sysupgrade's stage2 starts with kill_remaining (SIGTERM to everything).
+# A hostapd whose AP is up then runs the blob's stop_ap, which hangs the SoC
+# (bench 2026-09-09/12). Two guards, both from stage1 where the running system
+# is still whole: (1) a watchdog deadline a few minutes ahead, so a hang
+# resets the router into the slot it runs from instead of needing a power
+# cycle; (2) hostapd is ended with SIGKILL first - the process dies without
+# running its deinit path, the AP keeps beaconing without an authenticator
+# until the reboot. Skipped for "sysupgrade --test" (TEST=1 in that shell).
+cudy_prepare_for_stage2() {
+	local now
+	# only from the real sysupgrade run: COMMAND is set by /sbin/sysupgrade,
+	# TEST=1 there means --test; LuCI's validate_firmware_image has neither
+	[ -n "$COMMAND" ] && [ "${TEST:-0}" != 1 ] || return 0
+	now=$(cut -d. -f1 /proc/uptime)
+	echo $((now + 420)) > /proc/bcm96764_wdt_kick_secs 2>/dev/null
+	logger -t sysupgrade "cudy: watchdog deadline armed (+420 s), ending hostapd with SIGKILL before stage2"
+	killall -9 hostapd 2>/dev/null
+	return 0
+}
+
 platform_check_image() {
 	local file="$1"
 
@@ -43,6 +63,7 @@ platform_check_image() {
 		echo "this does not look like a Cudy WR3600 image"; return 1; }
 	tar -tf "$file" 2>/dev/null | grep -qx 'rootfs-forum.sq' || {
 		echo "the image has no rootfs-forum.sq"; return 1; }
+	cudy_prepare_for_stage2
 	return 0
 }
 

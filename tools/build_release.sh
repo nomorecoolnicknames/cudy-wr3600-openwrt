@@ -427,6 +427,8 @@ rm -rf "$SYS"; mkdir -p "$SYS"
 cp "$REL/bootfs-release.itb" "$REL/rootfs-forum.sq" "$SYS/"
 ( cd "$SYS" && sha256sum bootfs-release.itb rootfs-forum.sq > SHA256SUMS )
 ( cd "$SYS" && tar -cf "$REL/cudy-wr3600-sysupgrade-$VER.tar" 	bootfs-release.itb rootfs-forum.sq SHA256SUMS )
+# published next to the tar: cudy-update verifies the download against it
+( cd "$REL" && sha256sum "cudy-wr3600-sysupgrade-$VER.tar" > "cudy-wr3600-sysupgrade-$VER.tar.sha256" )
 echo "sysupgrade image: $(ls -la "$REL/cudy-wr3600-sysupgrade-$VER.tar" | awk '{print $5" bytes"}')"
 
 ls -la "$REL"

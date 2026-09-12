@@ -91,6 +91,14 @@ ssh root@192.168.10.1 'sh /tmp/update-from-release.sh /tmp/bootfs-release.itb /t
 затирать без `FORCE=1` — тогда вернуться на сток можно будет только через
 TFTP-recovery с подписанным заводским образом.
 
+## Способ 0 — из LuCI, с версии 2026-09-12
+
+System → Firmware update (GitHub) → Install: роутер сам берёт последний релиз с
+GitHub (`cudy-update` проверяет `.sha256` и `sysupgrade --test`), ставит его в
+другой слот с сохранением настроек и перезагружается. Там же — «Return to
+factory firmware» (пока заводская прошивка в другом слоте). С компьютера то же:
+`python3 cudy-install.py --to-stock` (роутер на нашей прошивке, root/12345678).
+
 ## Способ 4 — `sysupgrade` (LuCI или консоль), с версии 2026-09-11
 
 LuCI → System → Backup / Flash Firmware → «Flash new firmware image» →

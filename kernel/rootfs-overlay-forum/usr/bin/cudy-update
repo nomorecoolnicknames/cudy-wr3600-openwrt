@@ -1,0 +1,155 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# cudy-update - firmware updates for the Cudy WR3600 port straight from the
+# project's GitHub releases, and the way back to the factory firmware.
+#
+#   cudy-update check              latest release vs the running version (JSON)
+#   cudy-update install [--force]  download the latest sysupgrade image, verify
+#                                  it and apply it (settings are kept); the
+#                                  work runs detached, progress in the status file
+#   cudy-update status             the status file (JSON), for the LuCI page
+#   cudy-update slots              what the two slots hold (JSON)
+#   cudy-update to-stock [--force] make the OTHER slot the boot slot and reboot;
+#                                  refuses if that slot is not the factory
+#                                  firmware unless --force
+#
+# Used by LuCI (System -> Firmware update) and by cudy-install.py --to-stock.
+REPO=${CUDY_REPO:-nomorecoolnicknames/cudy-wr3600-openwrt}
+API="https://api.github.com/repos/$REPO/releases/latest"
+STATUS=/tmp/cudy-update.status
+TAR=/tmp/cudy-update.tar
+CURL="curl -fsSL -m 40 -A cudy-update/1"
+
+cur_version() { sed -n 's/^version=//p' /etc/cudy-release 2>/dev/null | head -n1; }
+jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+status() { # status <state> <message> [progress]
+	printf '{"state":"%s","message":"%s","progress":%s,"time":%s}\n' \
+		"$1" "$(jstr "$2")" "${3:-0}" "$(date +%s)" > "$STATUS"
+	logger -t cudy-update "$1: $2"
+}
+
+# ---------------------------------------------------------------- slots
+running_slot() {
+	local dev
+	dev=$(cat /tmp/.cudy-rootdev 2>/dev/null)
+	[ -n "$dev" ] || dev=$(awk '$2 == "/rom" { print $1 }' /proc/mounts)
+	case "$dev" in
+	*ubiblock0_4*) echo 1 ;;
+	*ubiblock0_6*) echo 2 ;;
+	*) echo 0 ;;
+	esac
+}
+# what is in slot $1: prints "factory", "empty", or the version marker
+slot_content() {
+	local blk ver
+	[ "$1" = 1 ] && blk=/dev/ubiblock0_4 || blk=/dev/ubiblock0_6
+	[ -b "$blk" ] || { echo empty; return; }
+	mkdir -p /tmp/cudy-update-mnt
+	if mount -t squashfs -o ro "$blk" /tmp/cudy-update-mnt 2>/dev/null; then
+		ver=$(sed -n 's/^version=//p' /tmp/cudy-update-mnt/etc/cudy-release 2>/dev/null | head -n1)
+		[ -n "$ver" ] || { [ -e /tmp/cudy-update-mnt/etc/openwrt_release ] && ver=factory || ver=unknown; }
+		umount /tmp/cudy-update-mnt 2>/dev/null
+		echo "$ver"
+	else
+		echo empty
+	fi
+}
+cmd_slots() {
+	local run other
+	run=$(running_slot); other=$(( 3 - run ))
+	printf '{"running":%s,"running_version":"%s","other":%s,"other_content":"%s"}\n' \
+		"$run" "$(jstr "$(cur_version)")" "$other" "$(jstr "$(slot_content "$other")")"
+}
+
+# ---------------------------------------------------------------- check
+fetch_latest() { # sets LATEST TARURL SHAURL SIZE NOTESURL
+	local json
+	json=$($CURL "$API") || return 1
+	LATEST=$(printf '%s' "$json" | jsonfilter -e '@.tag_name' 2>/dev/null | sed 's/^v//')
+	NOTESURL=$(printf '%s' "$json" | jsonfilter -e '@.html_url' 2>/dev/null)
+	TARURL=$(printf '%s' "$json" | jsonfilter -e '@.assets[*].browser_download_url' 2>/dev/null | grep -E 'cudy-wr3600-sysupgrade-.*\.tar$' | head -n1)
+	SHAURL=$(printf '%s' "$json" | jsonfilter -e '@.assets[*].browser_download_url' 2>/dev/null | grep -E 'cudy-wr3600-sysupgrade-.*\.tar\.sha256$' | head -n1)
+	SIZE=$(printf '%s' "$json" | jsonfilter -e '@.assets[@.name~"sysupgrade-.*\.tar$"].size' 2>/dev/null | head -n1)
+	[ -n "$LATEST" ] && [ -n "$TARURL" ]
+}
+cmd_check() {
+	local cur avail
+	cur=$(cur_version)
+	if ! fetch_latest; then
+		printf '{"ok":false,"current":"%s","error":"cannot reach GitHub (no internet, or DNS)"}\n' "$(jstr "$cur")"
+		return 1
+	fi
+	avail=false
+	[ -n "$LATEST" ] && [ "$LATEST" != "$cur" ] && [ "$(printf '%s\n%s\n' "$cur" "$LATEST" | sort | tail -n1)" = "$LATEST" ] && avail=true
+	printf '{"ok":true,"current":"%s","latest":"%s","update_available":%s,"url":"%s","sha256_url":"%s","size":%s,"notes_url":"%s"}\n' \
+		"$(jstr "$cur")" "$(jstr "$LATEST")" "$avail" "$(jstr "$TARURL")" "$(jstr "$SHAURL")" "${SIZE:-0}" "$(jstr "$NOTESURL")"
+}
+
+# ---------------------------------------------------------------- install
+do_install() { # runs detached
+	local force=$1 cur sum want
+	cur=$(cur_version)
+	status checking "checking $REPO"
+	fetch_latest || { status error "cannot reach GitHub"; return 1; }
+	if [ "$LATEST" = "$cur" ] && [ "$force" != 1 ]; then
+		status done "already on $cur"; return 0
+	fi
+	status downloading "downloading $LATEST ($(( ${SIZE:-0} / 1048576 )) MB)" 10
+	rm -f "$TAR"
+	$CURL -m 900 -o "$TAR" "$TARURL" || { status error "download failed"; rm -f "$TAR"; return 1; }
+	if [ -n "$SHAURL" ]; then
+		status verifying "verifying sha256" 60
+		want=$($CURL "$SHAURL" | cut -c1-64)
+		sum=$(sha256sum "$TAR" | cut -c1-64)
+		[ -n "$want" ] && [ "$want" = "$sum" ] || { status error "checksum mismatch"; rm -f "$TAR"; return 1; }
+	else
+		status verifying "no sha256 published for this release, relying on the image's own checksums" 60
+	fi
+	sysupgrade --test "$TAR" >/dev/null 2>&1 || { status error "image rejected by sysupgrade --test"; rm -f "$TAR"; return 1; }
+	status flashing "installing $LATEST into the other slot, the router reboots when done (2-4 min)" 70
+	sleep 2
+	exec sysupgrade "$TAR"
+}
+cmd_install() {
+	local force=0
+	[ "$1" = "--force" ] && force=1
+	status starting "update started" 1
+	setsid sh "$0" _run-install "$force" >/dev/null 2>&1 </dev/null &
+	echo '{"ok":true,"message":"started, poll status"}'
+}
+
+# ---------------------------------------------------------------- to-stock
+cmd_to_stock() {
+	local run other content force=0 meta
+	[ "$1" = "--force" ] && force=1
+	run=$(running_slot); [ "$run" != 0 ] || { echo "cannot tell the running slot"; return 1; }
+	other=$(( 3 - run ))
+	content=$(slot_content "$other")
+	case "$content" in
+	factory) ;;
+	empty) echo "slot $other is empty, nothing to boot there"; return 1 ;;
+	*)	[ "$force" = 1 ] || {
+			echo "slot $other holds '$content', not the factory firmware (use --force to boot it anyway)"
+			return 1
+		} ;;
+	esac
+	meta=/usr/share/cudy/meta-committed$other.bin
+	[ -f "$meta" ] || { echo "no $meta"; return 1; }
+	/usr/bin/ubiwrite /dev/ubi0_1 "$meta" >/dev/null && /usr/bin/ubiwrite /dev/ubi0_2 "$meta" >/dev/null || {
+		echo "metadata write failed"; return 1; }
+	sync
+	echo "slot $other ($content) is now the boot slot, rebooting"
+	logger -t cudy-update "switching to slot $other ($content) and rebooting"
+	( sleep 2; reboot ) >/dev/null 2>&1 &
+}
+
+case "$1" in
+check)        cmd_check ;;
+install)      shift; cmd_install "$@" ;;
+_run-install) do_install "$2" ;;
+status)       cat "$STATUS" 2>/dev/null || echo '{"state":"idle","message":"","progress":0}' ;;
+slots)        cmd_slots ;;
+to-stock)     shift; cmd_to_stock "$@" ;;
+*) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

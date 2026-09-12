@@ -18,6 +18,15 @@
 # (/usr/sbin/wl66-chan, see there), starts one hostapd per radio and puts the
 # interface into the LAN bridge (br-lan is created by /etc/init.d/wifi66, it
 # is not a netifd interface yet).
+#
+# HARD RULE (bench 2026-09-09 and 2026-09-12): a hostapd whose AP is really up
+# must never be stopped while the system keeps running - the blob's stop_ap
+# hangs the whole SoC (no log, watchdog only). Only a reboot may end it (the
+# kernel arms the watchdog in its reboot notifier). Therefore hostapd is NOT
+# handed to netifd as a managed process (netifd would kill it on teardown),
+# teardown leaves it alone, and a changed configuration is applied by
+# rebooting. "wifi reload" with an unchanged config just re-adopts the
+# running hostapd.
 . /lib/netifd/netifd-wireless.sh
 . /lib/netifd/hostapd.sh
 
@@ -89,6 +98,9 @@ $hostapd_cfg
 ${dtim_period:+dtim_period=$dtim_period}
 ${max_listen_int:+max_listen_interval=$max_listen_int}
 EOF
+	# the blob has no cfg80211 set_qos_map: hostapd aborts the whole BSS
+	# setup on it ("Failed to initialize QoS Map", bench 2026-09-12)
+	sed -i '/^qos_map_set=/d' "$hostapd_conf_file"
 	ap_ifname="$ifname"
 	wireless_add_vif "$name" "$ifname"
 }
@@ -120,9 +132,12 @@ drv_mac80211_setup() {
 	# hostapd side stays at the legacy 20 MHz definition that is known to
 	# work with the shim (cfg80211 would reject wider chandefs anyway: the
 	# blob's wiphy advertises no HT/VHT capabilities).
+	# the marker line makes width changes visible to the "unchanged?" check
+	# below (the width is applied by wl66-chan, not by hostapd)
 	cat >> "$hostapd_conf_file" <<EOF
 channel=$channel
 ieee80211n=0
+# wl66: band=$band htmode=$htmode channel=$channel txpower=$txpower
 EOF
 
 	wireless_set_data phy="$phy"
@@ -133,23 +148,34 @@ EOF
 		return 1
 	}
 
-	# "wifi reload" tears the radio down and sets it up again at once; the
-	# blob is still stopping the old BSS when the new hostapd arrives and
-	# that hostapd then fails (COUNTRY_UPDATE->DISABLED, seen on the bench).
-	# Wait for the previous hostapd of this radio to be gone, then give the
-	# driver a moment; "wifi down; sleep; wifi up" always worked.
-	local pidf="/var/run/wifi-$phy.pid" i=0 opid
+	# A hostapd from before this setup (boot, or "wifi reload")? Re-adopt it
+	# if the configuration did not change; otherwise the change needs a
+	# reboot (see the header). The pidfile survives teardown on purpose.
+	local pidf="/var/run/wifi-$phy.pid" prev="/var/run/hostapd-$phy.conf.running" opid i=0
 	opid="$(cat "$pidf" 2>/dev/null)"
-	while [ -n "$opid" ] && [ -d "/proc/$opid" ] && [ $i -lt 10 ]; do
-		sleep 1; i=$((i + 1))	# busybox sleep here takes whole seconds only
-	done
-	[ -n "$opid" ] && [ -d "/proc/$opid" ] && kill "$opid" 2>/dev/null
-	ip link set "$ap_ifname" down 2>/dev/null
-	[ -n "$opid" ] && sleep 4
+	if [ -n "$opid" ] && [ -d "/proc/$opid" ]; then
+		if [ -f "$prev" ] && cmp -s "$prev" "$hostapd_conf_file"; then
+			wl66_log "radio $phy: configuration unchanged, keeping hostapd $opid"
+			ip link set "$ap_ifname" master br-lan 2>/dev/null
+			wireless_set_up
+			return 0
+		fi
+		wl66_log "radio $phy: wireless configuration changed - the blob cannot restart an AP in place, rebooting in 5 s to apply it"
+		cp "$hostapd_conf_file" "$prev.pending" 2>/dev/null
+		[ -e /tmp/.wl66-reboot ] || {
+			touch /tmp/.wl66-reboot
+			( sleep 5; reboot ) >/dev/null 2>&1 </dev/null &
+		}
+		wireless_set_up
+		return 0
+	fi
+
+	# No hostapd yet (fresh boot). Do NOT set the link down here and do not
+	# enslave the interface before hostapd: with either the blob's start_ap
+	# failed ("ADD/SET beacon failed", bench 2026-09-12).
 	[ -x /usr/sbin/wl66-chan ] && \
 		/usr/sbin/wl66-chan "$ap_ifname" "$band" "$channel" "$htmode" pre
 
-	i=0
 	rm -f "$pidf"
 	/usr/sbin/hostapd -s -P "$pidf" -B "$hostapd_conf_file" || {
 		wl66_log "radio $phy: hostapd failed to start ($hostapd_conf_file)"
@@ -161,7 +187,8 @@ EOF
 		wireless_setup_failed HOSTAPD_START_FAILED
 		return 1
 	}
-	wireless_add_process "$(cat "$pidf")" /usr/sbin/hostapd 1
+	cp "$hostapd_conf_file" "$prev"
+	# not registered with netifd on purpose (see the header)
 
 	# LAN bridge (see the header) and the operating channel width
 	ip link set "$ap_ifname" master br-lan 2>/dev/null
@@ -174,15 +201,13 @@ EOF
 }
 
 drv_mac80211_teardown() {
-	local ifn
-
+	# Nothing is torn down (see the header): hostapd keeps running, the
+	# interface stays up and bridged. Setup decides between re-adopting it
+	# and rebooting.
 	json_select data
 	json_get_vars phy
 	json_select ..
-	# netifd has already stopped the hostapd it was told about
-	ifn="$(wl66_phy_ifname "$phy")"
-	[ -n "$ifn" ] && ip link set "$ifn" down 2>/dev/null
-	rm -f "/var/run/hostapd-$phy.conf"
+	wl66_log "radio $phy: teardown requested, AP left running (changes apply on reboot)"
 }
 
 drv_mac80211_cleanup() {

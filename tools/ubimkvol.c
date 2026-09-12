@@ -116,12 +116,17 @@ int main(int argc, char **argv)
 		}
 		if (strcmp(volname, name))
 			continue;
-		if (read_attr(ubiname, id, "data_bytes", sz, sizeof(sz))) {
-			/* fall back: assume it is fine */
-			printf("%d\n", id);
-			return 0;
+		/* capacity = reserved_ebs * usable_eb_size: data_bytes would be the
+		 * USED size on a static volume (bootfs) */
+		{
+			char ebs[32];
+			if (read_attr(ubiname, id, "reserved_ebs", ebs, sizeof(ebs)) ||
+			    read_attr(ubiname, id, "usable_eb_size", sz, sizeof(sz))) {
+				printf("%d\n", id);	/* cannot tell: leave it alone */
+				return 0;
+			}
+			cur = strtoull(ebs, NULL, 0) * strtoull(sz, NULL, 0);
 		}
-		cur = strtoull(sz, NULL, 0);
 		if (cur >= bytes) {
 			printf("%d\n", id);
 			return 0;

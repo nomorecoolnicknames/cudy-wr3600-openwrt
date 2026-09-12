@@ -122,14 +122,20 @@ fi
 # the target volume when needed; UBI had 32 free PEBs on that board.
 # ---------------------------------------------------------------------------
 UBIMKVOL=${UBIMKVOL:-/usr/bin/ubimkvol}
+vol_capacity() { # $1 = /dev/ubi0_N -> reserved bytes (data_bytes is the USED size on static volumes)
+	local id=${1##*/} ebs leb
+	ebs=$(cat "/sys/class/ubi/$id/reserved_ebs" 2>/dev/null || echo 0)
+	leb=$(cat "/sys/class/ubi/$id/usable_eb_size" 2>/dev/null || echo 0)
+	echo $((ebs * leb))
+}
 vol_fits() { # $1 = /dev/ubi0_N  $2 = bytes needed  $3 = volume name
-	local id=${1##*/} have
-	have=$(cat "/sys/class/ubi/$id/data_bytes" 2>/dev/null || echo 0)
+	local have
+	have=$(vol_capacity "$1")
 	[ "$have" -ge "$2" ] && return 0
-	say "$3 ($1) holds $have bytes, need $2: growing it"
+	say "$3 ($1) has room for $have bytes, need $2: growing it"
 	[ -x "$UBIMKVOL" ] || die "$3 is too small and there is no ubimkvol at $UBIMKVOL"
 	"$UBIMKVOL" ubi0 "$3" "$2" >/dev/null || die "cannot grow $3 to $2 bytes (UBI out of space?)"
-	have=$(cat "/sys/class/ubi/$id/data_bytes" 2>/dev/null || echo 0)
+	have=$(vol_capacity "$1")
 	[ "$have" -ge "$2" ] || die "$3 is still too small after resize ($have < $2)"
 }
 vol_fits "$BVOL" "$bsize" "bootfs$TGT"
