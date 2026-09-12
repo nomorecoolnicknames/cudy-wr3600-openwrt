@@ -28,7 +28,7 @@ mkdir -p "$W"/{kernel,port66,bsp-6.6,tools,docs}
 say "kernel side"
 cp "$R/kernel-6.6/build.sh" "$R/kernel-6.6/initramfs.list" "$W/kernel/"
 cp -a "$R/kernel-6.6/initramfs-release" "$W/kernel/"
-cp -a "$R/kernel-6.6/rootfs-overlay-forum" "$W/kernel/"
+cp -a "$R/kernel-6.6/rootfs-overlay-release" "$W/kernel/"
 cp -a "$R/kernel-6.6/pkgs" "$W/kernel/"                 # vendored OpenWrt ipks (wifi-scripts, iwinfo) + checksums
 mkdir -p "$W/kernel/port"
 rsync -a --exclude '*.itb' --exclude '*.bak*' --exclude '.omc' \
@@ -64,7 +64,7 @@ cp "$R/tools/build_release.sh" "$R/tools/clean_release_rootfs.sh" \
 
 say "documentation"
 cp "$R/docs/SOURCE_README.md" "$W/README.md"
-cp "$R/FORUM_BUILD_GUIDE.md" "$W/docs/" 2>/dev/null || true
+cp "$R/BUILD_GUIDE.md" "$W/docs/" 2>/dev/null || true
 [ -f "$R/release/RELEASE_NOTES.md" ] && cp "$R/release/RELEASE_NOTES.md" "$W/docs/"
 [ -f "$R/release/ROOTFS_PACKAGES.md" ] && cp "$R/release/ROOTFS_PACKAGES.md" "$W/docs/"
 
@@ -83,7 +83,7 @@ bad=$(grep -rIl -E "$pattern" "$W" 2>/dev/null \
 # bring-up addresses must not leak into shipped code; docs may still describe
 # the reference TFTP setup (they are not installed on the device)
 bad=$(grep -rIl -E '192\.168\.1\.(88|119|120)|gunwest' \
-	"$W/kernel/rootfs-overlay-forum" "$W/kernel/initramfs-release" \
+	"$W/kernel/rootfs-overlay-release" "$W/kernel/initramfs-release" \
 	"$W/port66" "$W/bsp-6.6" 2>/dev/null | grep -v '\.md$' | head || true)
 [ -z "$bad" ] || { echo "test addresses in shipped code:"; echo "$bad"; rc=1; }
 for f in $(find "$W" -name '*.ko' -o -name '*.o' -o -name '*.mod.c'); do

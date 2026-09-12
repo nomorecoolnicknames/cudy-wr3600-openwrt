@@ -61,8 +61,8 @@ platform_check_image() {
 
 	tar -tf "$file" 2>/dev/null | grep -qx 'bootfs-release.itb' || {
 		echo "this does not look like a Cudy WR3600 image"; return 1; }
-	tar -tf "$file" 2>/dev/null | grep -qx 'rootfs-forum.sq' || {
-		echo "the image has no rootfs-forum.sq"; return 1; }
+	tar -tf "$file" 2>/dev/null | grep -qx 'rootfs.sq' || {
+		echo "the image has no rootfs.sq"; return 1; }
 	cudy_prepare_for_stage2
 	return 0
 }
@@ -110,7 +110,7 @@ platform_do_upgrade() {
 	# moment this function returns, so the write must happen inline. REBOOT=no:
 	# do_stage2 does the reboot itself.
 	UPD66_DETACHED=1 FORCE=1 REBOOT=no sh /usr/bin/update-from-release.sh \
-		"$dir/bootfs-release.itb" "$dir/rootfs-forum.sq"
+		"$dir/bootfs-release.itb" "$dir/rootfs.sq"
 }
 
 platform_copy_config() {

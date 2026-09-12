@@ -14,7 +14,7 @@ What it does, step by step:
      user_up installs a fresh SSH key and starts dropbear on port 2222.
      Nothing is flashed at this point and the profile is removed again by
      the reboot at the end;
-  3. copies bootfs-release.itb and rootfs-forum.sq to the router;
+  3. copies bootfs-release.itb and rootfs.sq to the router;
   4. writes them into slot 1 (UBI volumes bootfs1 / rootfs1) with the stock
      ubiupdatevol and verifies the readback checksum;
   5. makes slot 1 the boot slot (bcm_bootstate +1) and reboots.
@@ -28,7 +28,7 @@ ssh-keygen). Linux, macOS and Windows (with OpenSSH installed) work.
 
 Usage:
     python3 cudy-install.py --router 192.168.10.1 --password 'WebUiPassword' \\
-        bootfs-release.itb rootfs-forum.sq
+        bootfs-release.itb rootfs.sq
 
     python3 cudy-install.py --router 192.168.10.1 --password ... --ssh-only
         (only turn on root SSH, then stop; e.g. to look around first)
@@ -346,7 +346,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__)
     ap.add_argument("bootfs", nargs="?", help="bootfs-release.itb")
-    ap.add_argument("rootfs", nargs="?", help="rootfs-forum.sq")
+    ap.add_argument("rootfs", nargs="?", help="rootfs.sq")
     ap.add_argument("--router", default="192.168.10.1", help="stock LAN address (default 192.168.10.1)")
     ap.add_argument("--password", help="stock web UI admin password (asked if omitted)")
     ap.add_argument("--slot", type=int, choices=(1, 2), default=1, help="slot to write (default 1)")

@@ -5,8 +5,8 @@
 # Cudy WR3600 (BCM6764). Runs ON THE ROUTER, on the STOCK firmware, over an
 # SSH session you already have (root, port 2222 after the bootstrap).
 #
-#   scp -O -P 2222 -i KEY bootfs-release.itb rootfs-forum.sq install-on-router.sh root@192.168.10.1:/tmp/
-#   ssh -p 2222 -i KEY root@192.168.10.1 'sh /tmp/install-on-router.sh /tmp/bootfs-release.itb /tmp/rootfs-forum.sq'
+#   scp -O -P 2222 -i KEY bootfs-release.itb rootfs.sq install-on-router.sh root@192.168.10.1:/tmp/
+#   ssh -p 2222 -i KEY root@192.168.10.1 'sh /tmp/install-on-router.sh /tmp/bootfs-release.itb /tmp/rootfs.sq'
 #
 # Options (environment variables):
 #   SLOT=1|2        slot to write (default 1; 2 = the factory slot, only if you know why)

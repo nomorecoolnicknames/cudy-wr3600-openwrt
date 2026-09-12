@@ -35,7 +35,7 @@ mkdir -p "$DEST"/{kernel/port,port66,bsp-6.6/compat,tools/install,docs,release}
 say "kernel side"
 cp "$R/kernel-6.6/build.sh" "$R/kernel-6.6/initramfs.list" "$DEST/kernel/"
 cp -a "$R/kernel-6.6/initramfs-release" "$DEST/kernel/"
-cp -a "$R/kernel-6.6/rootfs-overlay-forum" "$DEST/kernel/"
+cp -a "$R/kernel-6.6/rootfs-overlay-release" "$DEST/kernel/"
 cp -a "$R/kernel-6.6/pkgs" "$DEST/kernel/"          # vendored OpenWrt ipks (wifi-scripts, iwinfo) + checksums
 rsync -a "${EXCL[@]}" "$R/kernel-6.6/port/" "$DEST/kernel/port/"
 
@@ -61,7 +61,7 @@ cp "$R/docs/SOURCE_README.md" "$DEST/docs/"
 cp "$R/docs/ROADMAP.md" "$DEST/docs/"
 cp "$R/docs/RELEASE_CHECKLIST.md" "$DEST/docs/"
 [ -f "$R/docs/RELEASE_CODE_REVIEW.md" ] && cp "$R/docs/RELEASE_CODE_REVIEW.md" "$DEST/docs/"
-cp "$R/FORUM_BUILD_GUIDE.md" "$DEST/docs/FORUM_BUILD_GUIDE.md"
+cp "$R/BUILD_GUIDE.md" "$DEST/docs/BUILD_GUIDE.md"
 cp "$R/WIFI_CORE_MAP.md" "$DEST/docs/HARDWARE_RADIO.md"
 cp "$R/release/RELEASE_NOTES.md" "$DEST/docs/"
 cp "$R/release/ROOTFS_PACKAGES.md" "$DEST/docs/"

@@ -6,7 +6,7 @@
 трогаются. Способы 3 и 4 обновляют уже установленную прошивку по схеме A/B
 (пишется **другой** слот). UART, TFTP и recovery-режим не нужны нигде.
 
-Нужны два файла из релиза: `bootfs-release.itb` (ядро) и `rootfs-forum.sq`
+Нужны два файла из релиза: `bootfs-release.itb` (ядро) и `rootfs.sq`
 (система); для способа 4 — `cudy-wr3600-sysupgrade-<версия>.tar`. Суммы — в
 `SHA256SUMS`.
 
@@ -19,7 +19,7 @@ macOS, Windows 10/11 (встроенный OpenSSH) подходят. Компь
 
 ```sh
 python3 cudy-install.py --router 192.168.10.1 --password 'ПарольВебИнтерфейса' \
-    bootfs-release.itb rootfs-forum.sq
+    bootfs-release.itb rootfs.sq
 ```
 
 Скрипт:
@@ -45,7 +45,7 @@ python3 cudy-install.py --router 192.168.10.1 --password 'ПарольВебИн
 
 ```sh
 python3 cudy-install.py --router 192.168.10.1 --password '...' --no-commit \
-    bootfs-release.itb rootfs-forum.sq
+    bootfs-release.itb rootfs.sq
 ```
 
 — тогда новая прошивка загрузится **один раз**, а следующая перезагрузка
@@ -64,8 +64,8 @@ ssh -p 2222 -i ~/.cudy-install/id_ed25519 root@192.168.10.1
 Если root-SSH на заводской прошивке уже есть (порт 2222):
 
 ```sh
-scp -O -P 2222 -i КЛЮЧ bootfs-release.itb rootfs-forum.sq install-on-router.sh root@192.168.10.1:/tmp/
-ssh -p 2222 -i КЛЮЧ root@192.168.10.1 'sh /tmp/install-on-router.sh /tmp/bootfs-release.itb /tmp/rootfs-forum.sq'
+scp -O -P 2222 -i КЛЮЧ bootfs-release.itb rootfs.sq install-on-router.sh root@192.168.10.1:/tmp/
+ssh -p 2222 -i КЛЮЧ root@192.168.10.1 'sh /tmp/install-on-router.sh /tmp/bootfs-release.itb /tmp/rootfs.sq'
 ```
 
 Переменные: `SLOT=2` (писать во второй слот — только если понимаете зачем),
@@ -77,8 +77,8 @@ ssh -p 2222 -i КЛЮЧ root@192.168.10.1 'sh /tmp/install-on-router.sh /tmp/boo
 поставить новую сборку:
 
 ```sh
-scp -O bootfs-release.itb rootfs-forum.sq ubiwrite update-from-release.sh root@192.168.10.1:/tmp/
-ssh root@192.168.10.1 'sh /tmp/update-from-release.sh /tmp/bootfs-release.itb /tmp/rootfs-forum.sq'
+scp -O bootfs-release.itb rootfs.sq ubiwrite update-from-release.sh root@192.168.10.1:/tmp/
+ssh root@192.168.10.1 'sh /tmp/update-from-release.sh /tmp/bootfs-release.itb /tmp/rootfs.sq'
 ```
 
 `ubiwrite` — статический бинарник из релиза (исходник `tools/ubiwrite.c`); с

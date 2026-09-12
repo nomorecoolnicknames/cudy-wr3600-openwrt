@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # 6.6 helper modules that the stock wl.ko blob needs at run time
-# (see kernel-6.6/rootfs-overlay-forum/etc/init.d/wifi66).
+# (see kernel-6.6/rootfs-overlay-release/etc/init.d/wifi66).
 #
 # Out-of-tree build (release):
 #   make -C <kernel-src> O=<kernel-build> M=port66/shim66 \

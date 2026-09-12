@@ -71,7 +71,7 @@ your computer (Python 3 + OpenSSH):
 
 ```sh
 python3 tools/install/cudy-install.py --router 192.168.10.1 --password 'web-ui password' \
-    bootfs-release.itb rootfs-forum.sq
+    bootfs-release.itb rootfs.sq
 ```
 
 Firmware files and checksums are on the
@@ -83,7 +83,7 @@ Firmware files and checksums are on the
 |---|---|
 | `kernel/port/` | kernel patch, device tree, configs, FIT description |
 | `kernel/initramfs-release/` | preinit (slot-aware rootfs selection, watchdog fuse) |
-| `kernel/rootfs-overlay-forum/` | OpenWrt overlay: `wifi66` init, netifd wireless driver, uci configs |
+| `kernel/rootfs-overlay-release/` | OpenWrt overlay: `wifi66` init, netifd wireless driver, uci configs |
 | `kernel/pkgs/` | vendored OpenWrt 24.10.2 packages the armsr rootfs lacks (wifi-scripts, iwinfo), checksummed |
 | `port66/enet66`, `port66/enet66b` | Ethernet: SF2 switch, SystemPort, PMC, SerDes, BCM53134 |
 | `port66/vpcie66` | virtual PCI host presenting the on-chip radios to the blob |

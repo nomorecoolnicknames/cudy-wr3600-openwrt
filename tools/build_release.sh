@@ -3,8 +3,8 @@
 # Cudy WR3600 (BCM6764) release build.
 #
 #   release/bootfs-release.itb   Linux 6.6.93 + initramfs (quiet boot, WDT fuse)
-#   release/rootfs-forum.sq      OpenWrt 24.10.2 + 6.6.93 modules + wl.ko shim
-#   release/bundle-forum.itb     loader/u-boot/bootfs/rootfs recovery bundle
+#   release/rootfs.sq      OpenWrt 24.10.2 + 6.6.93 modules + wl.ko shim
+#   release/bundle.itb     loader/u-boot/bootfs/rootfs recovery bundle
 #   release/SHA256SUMS
 #
 # Everything is idempotent and self-contained: nothing outside .work/release and
@@ -288,7 +288,7 @@ for b in "$W/rootfs/usr/share/cudy"/meta-committed*.bin; do
 done
 cp "$R/tools/install/update-from-release.sh" "$W/rootfs/usr/bin/update-from-release.sh"
 chmod 0755 "$W/rootfs/usr/bin/update-from-release.sh"
-cp -a "$R/kernel-6.6/rootfs-overlay-forum/." "$W/rootfs/"
+cp -a "$R/kernel-6.6/rootfs-overlay-release/." "$W/rootfs/"
 # No git revision here on purpose: it would make the artifacts depend on the
 # commit that records them. The source package name identifies the sources.
 cat > "$W/rootfs/etc/cudy-release" <<EOF
@@ -353,15 +353,15 @@ done > "$W/foreign-modules.txt" || true
 find "$W/rootfs" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 
 # mksquashfs honours SOURCE_DATE_EPOCH on its own (it rejects -mkfs-time then)
-mksquashfs "$W/rootfs" "$REL/rootfs-forum.sq" -noappend -comp xz -b 262144 \
+mksquashfs "$W/rootfs" "$REL/rootfs.sq" -noappend -comp xz -b 262144 \
 	-no-xattrs >/dev/null
-echo "rootfs-forum.sq: $(stat -c%s "$REL/rootfs-forum.sq") bytes"
+echo "rootfs.sq: $(stat -c%s "$REL/rootfs.sq") bytes"
 
 # ---------------------------------------------------------------------------
 say "7/8 recovery bundle"
 cp "$STOCK/loader.bin" "$STOCK/uboot.bin" "$FIT/"
-cp "$REL/bootfs-release.itb" "$REL/rootfs-forum.sq" "$FIT/"
-cat > "$FIT/bundle-forum.its" <<'EOF'
+cp "$REL/bootfs-release.itb" "$REL/rootfs.sq" "$FIT/"
+cat > "$FIT/bundle.its" <<'EOF'
 /dts-v1/;
 / {
 	description = "R77";
@@ -390,7 +390,7 @@ cat > "$FIT/bundle-forum.its" <<'EOF'
 		};
 		nand_squashfs {
 			description = "rootfs";
-			data = /incbin/("rootfs-forum.sq");
+			data = /incbin/("rootfs.sq");
 			type = "filesystem";
 			compression = "none";
 			hash-1 { algo = "sha256"; };
@@ -409,12 +409,12 @@ cat > "$FIT/bundle-forum.its" <<'EOF'
 	};
 };
 EOF
-( cd "$FIT" && "$MK" -f bundle-forum.its bundle-forum.itb >/dev/null )
-cp "$FIT/bundle-forum.itb" "$REL/bundle-forum.itb"
+( cd "$FIT" && "$MK" -f bundle.its bundle.itb >/dev/null )
+cp "$FIT/bundle.itb" "$REL/bundle.itb"
 
 # ---------------------------------------------------------------------------
 say "8/8 checksums"
-( cd "$REL" && sha256sum bootfs-release.itb rootfs-forum.sq bundle-forum.itb \
+( cd "$REL" && sha256sum bootfs-release.itb rootfs.sq \
 	> SHA256SUMS )
 cat "$REL/SHA256SUMS"
 
@@ -424,9 +424,9 @@ cat "$REL/SHA256SUMS"
 # need).
 SYS="$W/sysupgrade"
 rm -rf "$SYS"; mkdir -p "$SYS"
-cp "$REL/bootfs-release.itb" "$REL/rootfs-forum.sq" "$SYS/"
-( cd "$SYS" && sha256sum bootfs-release.itb rootfs-forum.sq > SHA256SUMS )
-( cd "$SYS" && tar -cf "$REL/cudy-wr3600-sysupgrade-$VER.tar" 	bootfs-release.itb rootfs-forum.sq SHA256SUMS )
+cp "$REL/bootfs-release.itb" "$REL/rootfs.sq" "$SYS/"
+( cd "$SYS" && sha256sum bootfs-release.itb rootfs.sq > SHA256SUMS )
+( cd "$SYS" && tar -cf "$REL/cudy-wr3600-sysupgrade-$VER.tar" 	bootfs-release.itb rootfs.sq SHA256SUMS )
 # published next to the tar: cudy-update verifies the download against it
 ( cd "$REL" && sha256sum "cudy-wr3600-sysupgrade-$VER.tar" > "cudy-wr3600-sysupgrade-$VER.tar.sha256" )
 echo "sysupgrade image: $(ls -la "$REL/cudy-wr3600-sysupgrade-$VER.tar" | awk '{print $5" bytes"}')"

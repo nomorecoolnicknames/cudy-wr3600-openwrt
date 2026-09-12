@@ -4,9 +4,9 @@
 # update-from-release.sh - update a Cudy WR3600 that ALREADY runs this
 # firmware (Linux 6.6 / OpenWrt 24.10) to a newer bootfs/rootfs.
 #
-#   scp -O bootfs-release.itb rootfs-forum.sq root@192.168.10.1:/tmp/
+#   scp -O bootfs-release.itb rootfs.sq root@192.168.10.1:/tmp/
 #   ssh root@192.168.10.1 'sh /usr/bin/update-from-release.sh \
-#       /tmp/bootfs-release.itb /tmp/rootfs-forum.sq'
+#       /tmp/bootfs-release.itb /tmp/rootfs.sq'
 #
 # How it works (A/B): the running rootfs is served by a ubiblock device on its
 # own UBI volume, and a volume that is in use CANNOT be rewritten - the first
