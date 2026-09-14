@@ -94,9 +94,11 @@ ssh -p 2222 -i КЛЮЧ root@192.168.10.1
 
 ```sh
 # Заводской том rootfs1 — 184 LEB (23 363 584 Б), наш образ больше, поэтому
-# сначала расширяем том до 192 LEB. UBI делает это на месте; свободные
-# блоки видно в "ubinfo /dev/ubi0" (строка available).
-ubirsvol /dev/ubi0 -n 4 -S 192
+# сначала расширяем том под размер файла. UBI делает это на месте, данные
+# слота 1 нам всё равно перезаписывать; свободные блоки видно в
+# "ubinfo /dev/ubi0" (строка available).
+leb=$(cat /sys/class/ubi/ubi0_4/usable_eb_size)
+ubirsvol /dev/ubi0 -n 4 -S $(( ($(wc -c < /tmp/rootfs.sq) + leb - 1) / leb ))
 
 # записать оба тома слота 1 штатным ubiupdatevol
 ubiupdatevol /dev/ubi0_3 /tmp/bootfs-release.itb    # ядро
