@@ -279,6 +279,73 @@ static int __sf2_mdio_write(struct sf2_6764 *sf2, int phy, int reg, u16 data)
 	return sf2_mdio_cmd(sf2, cmd, NULL);
 }
 
+/* ---------------------------------------------------------------- C45 ----
+ * The cascade 2.5G PHY of the WR3600H (R69) is a Clause-45 part at MDIO 0x18.
+ * The controller does C45 natively; only the clause bit in CFG has to be
+ * flipped, and it MUST be put back, or every C22 user on this bus (internal
+ * GPHY, the 53134 switch) would start talking the wrong protocol.
+ */
+static int __sf2_mdio_c45(struct sf2_6764 *sf2, int op, int phy, int dev,
+			  int reg, u16 data, u32 *out)
+{
+	u32 cfg, cmd;
+	int ret;
+
+	cfg = readl(sf2->mdio + SF2_MDIO_CFG);
+	writel(cfg & ~ETHSW_MDIO_CFG_CLAUSE22, sf2->mdio + SF2_MDIO_CFG);
+
+	/* address phase: which register inside the device */
+	cmd = ((phy & BCM_PHY_ID_M) << ETHSW_MDIO_C22_PHY_ADDR_SHIFT) |
+	      ((dev & 0x1f) << ETHSW_MDIO_C45_DEV_SHIFT) |
+	      (ETHSW_MDIO_CMD_C45_ADDRESS << ETHSW_MDIO_CMD_SHIFT) |
+	      ((u32)reg & ETHSW_MDIO_PHY_DATA_MASK);
+	ret = sf2_mdio_cmd(sf2, cmd, NULL);
+	if (ret)
+		goto out;
+
+	cmd = ((phy & BCM_PHY_ID_M) << ETHSW_MDIO_C22_PHY_ADDR_SHIFT) |
+	      ((dev & 0x1f) << ETHSW_MDIO_C45_DEV_SHIFT) |
+	      (op << ETHSW_MDIO_CMD_SHIFT);
+	if (op == ETHSW_MDIO_CMD_C45_WRITE)
+		cmd |= data & ETHSW_MDIO_PHY_DATA_MASK;
+	ret = sf2_mdio_cmd(sf2, cmd, out);
+out:
+	writel(cfg, sf2->mdio + SF2_MDIO_CFG);
+	return ret;
+}
+
+/* Returns the 16-bit value, or a negative errno. */
+int sf2_mdio_c45_read(int phy, int dev, int reg)
+{
+	struct sf2_6764 *sf2 = g_sf2;
+	u32 val = 0;
+	int ret;
+
+	if (!sf2)
+		return -ENODEV;
+	mutex_lock(&sf2->lock);
+	ret = __sf2_mdio_c45(sf2, ETHSW_MDIO_CMD_C45_READ, phy, dev, reg, 0,
+			     &val);
+	mutex_unlock(&sf2->lock);
+	return ret ? ret : (int)(val & ETHSW_MDIO_PHY_DATA_MASK);
+}
+EXPORT_SYMBOL_GPL(sf2_mdio_c45_read);
+
+int sf2_mdio_c45_write(int phy, int dev, int reg, u16 val)
+{
+	struct sf2_6764 *sf2 = g_sf2;
+	int ret;
+
+	if (!sf2)
+		return -ENODEV;
+	mutex_lock(&sf2->lock);
+	ret = __sf2_mdio_c45(sf2, ETHSW_MDIO_CMD_C45_WRITE, phy, dev, reg, val,
+			     NULL);
+	mutex_unlock(&sf2->lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(sf2_mdio_c45_write);
+
 int sf2_6764_mdio_read(struct sf2_6764 *sf2, int phy, int reg)
 {
 	int ret;
@@ -900,6 +967,19 @@ int sf2_6764_open(struct sf2_6764 *sf2)
 		 * lets us retry other speeds/states live */
 		sf2_wr32(sf2, SF2_STS_OVERRIDE_P(0),
 			 p0_ovr >= 0 ? (u32)p0_ovr : (0x40 | 0x08 | 0x02 | 0x01));
+		/* WR3600H (R69): the WAN is not the GPHY but port_sgmii1 (P6),
+		 * fed by serdes core 1 through the external 2.5G cascade PHY.
+		 * Force that MAC the same way as the other serdes port, so the
+		 * datapath is ready once the copper side links. */
+		if (SP_SPLIT_WAN_PORT != 0 &&
+		    SP_SPLIT_WAN_PORT != (unsigned int)serdes_port) {
+			sf2_wr32(sf2, SF2_STS_OVERRIDE_P(SP_SPLIT_WAN_PORT),
+				 0x40 | 0x0c | 0x02 | 0x01);
+			dev_info(sf2->dev,
+				 "WAN port %u state override -> 0x%08x (forced 2.5G FDX link)\n",
+				 SP_SPLIT_WAN_PORT,
+				 sf2_rd32(sf2, SF2_STS_OVERRIDE_P(SP_SPLIT_WAN_PORT)));
+		}
 		lnksts_post = sf2_rd32(sf2, SF2_LNKSTS);
 		dev_info(sf2->dev, "override p%d readback 0x%08x lnksts 0x%08x\n", serdes_port,
 			 sf2_rd32(sf2, SF2_STS_OVERRIDE_P(serdes_port)), lnksts_post);

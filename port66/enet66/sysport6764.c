@@ -132,7 +132,13 @@ int enet6764_split;
 module_param_named(split, enet6764_split, int, 0444);
 MODULE_PARM_DESC(split, "1 = separate WAN (P0) and LAN (P5) netdevs; 0 = single eth0 (default)");
 
-unsigned int enet6764_wan_port_sel = SF2_EN_MAN_TO_WAN | (1u << SP_SPLIT_WAN_PORT);
+/* SF2 port carrying the WAN in split mode: 0 = internal GPHY (WR3600/R77),
+ * 6 = port_sgmii1 towards the 2.5G cascade PHY (WR3600H/R69). */
+unsigned int enet6764_wan_port = SP_SPLIT_WAN_PORT_DEFAULT;
+module_param_named(wan_port, enet6764_wan_port, uint, 0444);
+MODULE_PARM_DESC(wan_port, "SF2 port used as WAN in split mode (0 = internal GPHY, 6 = serdes1/2.5G)");
+
+unsigned int enet6764_wan_port_sel = SF2_EN_MAN_TO_WAN | (1u << SP_SPLIT_WAN_PORT_DEFAULT);
 module_param_named(wan_port_sel, enet6764_wan_port_sel, uint, 0444);
 MODULE_PARM_DESC(wan_port_sel, "SF2 WAN_PORT_SEL (0x130) in split mode; R2 fallbacks 0x001/0x200");
 
@@ -1159,6 +1165,15 @@ static struct platform_driver * const enet6764_drivers[] = {
 
 static int __init enet6764_init(void)
 {
+	/* wan_port_sel defaults to "the default WAN port"; when only wan_port
+	 * was given (WR3600H), make the register follow it instead of silently
+	 * steering the manager port at the internal GPHY. */
+	if (enet6764_wan_port_sel ==
+	    (SF2_EN_MAN_TO_WAN | (1u << SP_SPLIT_WAN_PORT_DEFAULT)) &&
+	    enet6764_wan_port != SP_SPLIT_WAN_PORT_DEFAULT)
+		enet6764_wan_port_sel = SF2_EN_MAN_TO_WAN |
+					(1u << enet6764_wan_port);
+
 	return platform_register_drivers(enet6764_drivers,
 					 ARRAY_SIZE(enet6764_drivers));
 }

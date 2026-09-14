@@ -50,9 +50,34 @@
  *   phy-xfi-tx-polarity-inverse, phy-xfi-rx-polarity-inverse,
  *   force-2p5g-10gvco
  */
-#define SD_CORE			0
 #define SD_LANE			0
-#define SD_PRTAD		6
+
+/* Which serdes core to bring up.  Core 0 (PRTAD 6) is the 2.5G link to the
+ * external 53134 switch on every WR3600/WR3600H board.  Core 1 (PRTAD 7) is
+ * the second serdes, used on the WR3600H (R69) for its 2.5G WAN port, where
+ * it feeds an external cascade PHY instead of the switch.  The register map
+ * is identical, one SD_CORE_STRIDE apart (see sd_reg() below), so the whole
+ * bring-up is shared and only the core/PRTAD pair changes.
+ * Defaults keep the WR3600 (R77) behaviour byte-for-byte. */
+/* The core currently addressed by sd_reg() and by the exported link/speed
+ * helpers.  After bring-up it is left on the primary (lowest) core, which is
+ * the uplink to the 53134 on every board, so callers keep their meaning. */
+static int sd_core;
+static int sd_prtad = 6;
+
+static unsigned int cores = 0x1;
+module_param(cores, uint, 0444);
+MODULE_PARM_DESC(cores,
+		 "bitmask of serdes cores to bring up: 0x1 = core 0 only, the uplink to the 53134 (default); 0x3 = cores 0+1, the WR3600H which also has its 2.5G WAN on core 1");
+
+static int prtad_override;
+module_param_named(prtad, prtad_override, int, 0444);
+MODULE_PARM_DESC(prtad, "override the PRTAD (0 = derive: 6 for core 0, 7 for core 1)");
+
+static int core_prtad(int core)
+{
+	return prtad_override ? prtad_override : 6 + core;
+}
 
 static unsigned long serdes_base_phys;	/* fallback if DT node missing */
 module_param(serdes_base_phys, ulong, 0444);
@@ -128,6 +153,7 @@ static bool sd_inited;
 #define SD_STATUS_1		0x0024
 #define SD_INDIR_ACC_CNTRL	0x0800
 #define SD_CORE_STRIDE		0x1000		/* core 1 is +0x1000 */
+#define SD_MAX_CORES		2
 
 /* serdes_access_6764.h:38..39 */
 #define SD_DEV_TYPE_SHIFT	27
@@ -249,7 +275,7 @@ static void merlin_delay_us(unsigned int us)
 
 static void __iomem *sd_reg(u32 off)
 {
-	return sd_base + (SD_CORE * SD_CORE_STRIDE) + off;
+	return sd_base + (sd_core * SD_CORE_STRIDE) + off;
 }
 
 /*
@@ -685,11 +711,11 @@ static void serdes_access_config(bool enable)
 	else
 		v &= ~(SD_CTL_REFCLK_RESET | SD_CTL_SERDES_RESET);
 
-	if (SD_PRTAD > 0x1f)
+	if (sd_prtad > 0x1f)
 		v |= SD_CTL_TEST_EN;
 	else
 		v = (v & ~SD_CTL_PRTAD_MASK) |
-		    ((u32)SD_PRTAD << SD_CTL_PRTAD_SHIFT);
+		    ((u32)sd_prtad << SD_CTL_PRTAD_SHIFT);
 
 	writel(v, sd_reg(SD_CONTROL));
 	msleep(10);
@@ -1209,7 +1235,7 @@ static int merlin_core_reset(void)
 {
 	int ret;
 
-	pr_info(DRV ": Toggle Serdes Core #%d PMD and uC reset.\n", SD_CORE);
+	pr_info(DRV ": Toggle Serdes Core #%d PMD and uC reset.\n", sd_core);
 	ret = sd_wr(PMD_DEV, REG_CORE_RESET, 0x0000);
 	if (ret)
 		return ret;
@@ -1234,7 +1260,7 @@ static int merlin_core_init(void)
 		return ret;
 
 	pr_info(DRV ": merlin_core_init: END. Core #%d with PRTAD = %d, ln_offset_stap = 0\n",
-		SD_CORE, SD_PRTAD);
+		sd_core, sd_prtad);
 	return 0;
 }
 
@@ -1250,7 +1276,7 @@ static int merlin_load_firmware(void)
 		ret = sd_wr_field(PMD_DEV, REG_MDIO_MULTI_PRTS, 0x8000, 15, 0);
 		if (ret)
 			return ret;
-		ret = sd_wr_field(PMD_DEV, REG_MDIO_BRCST_ADDR, 0x001f, 0, SD_PRTAD);
+		ret = sd_wr_field(PMD_DEV, REG_MDIO_BRCST_ADDR, 0x001f, 0, sd_prtad);
 		if (ret)
 			return ret;
 	}
@@ -1381,7 +1407,7 @@ static int merline_speed_set_core(bool vco_12p5g, const struct prog_ent *speed_t
 		return ret;
 
 	pr_info(DRV ": Core #%d Lane #%d PMD Lock Speed Up programming\n",
-		SD_CORE, SD_LANE);
+		sd_core, SD_LANE);
 
 	/* final PLL lock check */
 	ret = merlin_chk_pll_lock();
@@ -1405,15 +1431,15 @@ static int merlin16_serdes_init(void)
 	int ret;
 
 	pr_info(DRV ": === Start of 10G Active Ethernet Initialization for core %d port 0 ===\n",
-		SD_CORE);
+		sd_core);
 
 	/* phy_drv_146class_serdes.c:184..188 - latch the serdes MDIO address */
 	v = readl(sd_reg(SD_CONTROL));
-	v = (v & ~SD_CTL_PRTAD_MASK) | ((u32)SD_PRTAD << SD_CTL_PRTAD_SHIFT);
+	v = (v & ~SD_CTL_PRTAD_MASK) | ((u32)sd_prtad << SD_CTL_PRTAD_SHIFT);
 	writel(v, sd_reg(SD_CONTROL));
 
 	pr_info(DRV ": --- Step 0 powerup/reset sequence of core #%d at address %d\n",
-		SD_CORE, SD_PRTAD);
+		sd_core, sd_prtad);
 
 	/*
 	 * Power on: up / down / up so a later power-down is not bypassed
@@ -1512,7 +1538,7 @@ int serdes6764_init_2p5g(void)
 	st_end = readl(sd_reg(SD_STATUS));
 	ctrl_end = readl(sd_reg(SD_CONTROL));
 	pr_info(DRV ": === End of 10G Active Ethernet Initialization for core %d port 0 ===\n",
-		SD_CORE);
+		sd_core);
 
 out:
 	init_ret = ret;
@@ -1620,7 +1646,13 @@ static void __iomem *map_block(const char *compat, unsigned long fallback,
 
 static int __init serdes6764_module_init(void)
 {
-	int ret;
+	int ret, c, primary;
+
+	if (!cores)
+		cores = 0x1;
+	primary = __ffs(cores);
+	sd_core = primary;
+	sd_prtad = core_prtad(primary);
 
 	sd_base = map_block("brcm,serdes1", serdes_base_phys, 0x1300,
 			    "serdes_base_phys");
@@ -1644,20 +1676,40 @@ static int __init serdes6764_module_init(void)
 	if (!autoinit)
 		return 0;
 
-	ret = serdes6764_init_2p5g();
-	if (ret) {
-		pr_err(DRV ": 2.5G bring-up failed: %d\n", ret);
-		return 0;	/* stay loaded so the caller can retry / probe */
+	/* Bring up every selected core in turn.  A board with two of them (the
+	 * WR3600H: core 0 to the 53134, core 1 to the 2.5G WAN cascade PHY)
+	 * runs the identical sequence twice, one SD_CORE_STRIDE apart. */
+	for (c = 0; c < SD_MAX_CORES; c++) {
+		if (!(cores & (1u << c)))
+			continue;
+
+		sd_core = c;
+		sd_prtad = core_prtad(c);
+
+		ret = serdes6764_init_2p5g();
+		if (ret) {
+			pr_err(DRV ": core %d: 2.5G bring-up failed: %d\n",
+			       c, ret);
+			continue;	/* try the next core, stay loaded */
+		}
+
+		ret = serdes6764_link_up();
+		if (ret > 0) {
+			if (c == primary)
+				bcm96764_mark(E66B_MK_SD_LINK);
+			pr_info(DRV ": core %d: serdes link UP at %d Mbps\n",
+				c, serdes6764_speed());
+		} else {
+			if (c == primary)
+				bcm96764_mark(E66B_MK_ERR_SD_LINK);
+			pr_warn(DRV ": core %d: serdes link down after bring-up (%d)\n",
+				c, ret);
+		}
 	}
 
-	ret = serdes6764_link_up();
-	if (ret > 0) {
-		bcm96764_mark(E66B_MK_SD_LINK);
-		pr_info(DRV ": serdes link UP at %d Mbps\n", serdes6764_speed());
-	} else {
-		bcm96764_mark(E66B_MK_ERR_SD_LINK);
-		pr_warn(DRV ": serdes link down after bring-up (%d)\n", ret);
-	}
+	/* leave the helpers pointing at the primary (LAN uplink) core */
+	sd_core = primary;
+	sd_prtad = core_prtad(primary);
 	return 0;
 }
 

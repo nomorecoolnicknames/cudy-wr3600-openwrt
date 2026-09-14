@@ -110,11 +110,15 @@ mod port66/leds66 ""
 mod bsp-6.6/compat ""
 mod port66/shim66 "$R/bsp-6.6/compat/Module.symvers $R/port66/enet66/Module.symvers"
 mod port66/reboot66 ""
+# WR3600H only: read-out of the external 2.5G cascade PHY. Loaded by the
+# initramfs when the device tree says this is an R69 board.
+mod obs/cascade "$R/port66/enet66/Module.symvers"
 for m in port66/enet66/enet6764.ko port66/enet66b/serdes6764.ko \
          port66/enet66b/extsw6764.ko port66/leds66/leds-bca-cled.ko \
          port66/vpcie66/vpcie66.ko bsp-6.6/compat/bcm_shim.ko \
          port66/shim66/h30_bpm_live.ko port66/shim66/h30_ubus_all.ko \
-         port66/shim66/h30_irqgate.ko port66/reboot66/reboot6764.ko; do
+         port66/shim66/h30_irqgate.ko port66/reboot66/reboot6764.ko \
+         obs/cascade/cascade_probe.ko; do
 	need "$R/$m"
 done
 
@@ -155,6 +159,9 @@ while read -r m; do
 	need "$src"
 	cp "$src" "$W/initramfs/$m"
 done < "$W/initramfs/modules.order"
+# Not in modules.order: the initramfs loads it only on a WR3600H, where it
+# reports what the external 2.5G WAN PHY says.
+cp "$R/obs/cascade/cascade_probe.ko" "$W/initramfs/cascade_probe.ko"
 # normalize timestamps: the cpio kbuild embeds preserves mtimes
 # (CONFIG_INITRAMFS_PRESERVE_MTIME), including those of the directories
 find "$W/initramfs" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
@@ -196,6 +203,17 @@ cp "$FIT/bootfs-release.itb" "$REL/bootfs-release.itb"
 bsz=$(stat -c%s "$REL/bootfs-release.itb")
 echo "bootfs-release.itb: $bsz bytes ($(( (bsz + 126975) / 126976 )) LEB)"
 [ "$bsz" -le "$BOOTFS_MAX" ] || die "bootfs exceeds 27 LEB ($BOOTFS_MAX bytes)"
+
+# WR3600H (R69): the same kernel with the R69 device tree.  The board differs
+# only in its WAN port, and the initramfs reads the flavour out of the device
+# tree, so no second kernel build is needed.  UNTESTED - no WR3600H hardware.
+cp "$R/kernel-6.6/port/fdt_96764SV1-66-R69.dtb" "$FIT/fdt.dtb"
+( cd "$FIT" && "$MK" -f bootfs66.its bootfs-wr3600h.itb >/dev/null )
+cp "$FIT/bootfs-wr3600h.itb" "$REL/bootfs-wr3600h.itb"
+hsz=$(stat -c%s "$REL/bootfs-wr3600h.itb")
+echo "bootfs-wr3600h.itb: $hsz bytes ($(( (hsz + 126975) / 126976 )) LEB)"
+[ "$hsz" -le "$BOOTFS_MAX" ] || die "WR3600H bootfs exceeds 27 LEB ($BOOTFS_MAX bytes)"
+cp "$R/kernel-6.6/port/fdt_96764SV1-66.dtb" "$FIT/fdt.dtb"
 
 # ---------------------------------------------------------------------------
 say "6/8 rootfs"

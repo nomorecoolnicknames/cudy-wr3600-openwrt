@@ -93,6 +93,11 @@ ssh -p 2222 -i КЛЮЧ root@192.168.10.1
 Дальше — на самом роутере (заводская прошивка):
 
 ```sh
+# Заводской том rootfs1 — 184 LEB (23 363 584 Б), наш образ больше, поэтому
+# сначала расширяем том до 192 LEB. UBI делает это на месте; свободные
+# блоки видно в "ubinfo /dev/ubi0" (строка available).
+ubirsvol /dev/ubi0 -n 4 -S 192
+
 # записать оба тома слота 1 штатным ubiupdatevol
 ubiupdatevol /dev/ubi0_3 /tmp/bootfs-release.itb    # ядро
 ubiupdatevol /dev/ubi0_4 /tmp/rootfs.sq             # система

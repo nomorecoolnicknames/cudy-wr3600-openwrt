@@ -28,10 +28,32 @@ mount -t proc none /proc || echo "cudy66: proc mount failed" > /dev/kmsg
 mount -t sysfs none /sys || echo "cudy66: sysfs mount failed" > /dev/kmsg
 mount -t devtmpfs none /dev || echo "cudy66: devtmpfs mount failed" > /dev/kmsg
 mark 0x22
+# Which board is this?  The WR3600 (R77) drives its WAN from the internal GPHY
+# on SF2 port 0; the WR3600H (R69) disables that GPHY and puts a 2.5G WAN on
+# port_sgmii1 (SF2 port 6) behind serdes core 1 and an external cascade PHY.
+# The two images differ only in the device tree, so the flavour is read from
+# it here instead of baking a second set of module arguments into the kernel.
+H_WAN=0
+for f in /proc/device-tree/*/sf2*/ports/port_sgmii1/status 	 /proc/device-tree/sf2*/ports/port_sgmii1/status; do
+	[ -f "$f" ] || continue
+	[ "$(tr -d '\000' < "$f")" = "okay" ] && H_WAN=1
+done
+[ "$H_WAN" = 1 ] && echo "cudy66: WR3600H wiring (2.5G WAN on port_sgmii1)" > /dev/kmsg
+
 for m in $(cat /modules.order 2>/dev/null); do
 	[ -f "/$m" ] || continue
-	insmod "/$m" $(cat "/$m.args" 2>/dev/null)
+	a=$(cat "/$m.args" 2>/dev/null)
+	if [ "$H_WAN" = 1 ]; then
+		case "$m" in
+		enet6764.ko)   a="split=1 tag_fmt=1 wan_port=6" ;;
+		serdes6764.ko) a="cores=0x3" ;;
+		esac
+	fi
+	insmod "/$m" $a
 done
+
+# On the WR3600H, report what the external WAN PHY says (read-only CL45).
+[ "$H_WAN" = 1 ] && [ -f /cascade_probe.ko ] && insmod /cascade_probe.ko
 echo 300 > /proc/bcm96764_wdt_kick_secs 2>/dev/null
 ip link set eth0 up 2>/dev/null
 mark 0x23

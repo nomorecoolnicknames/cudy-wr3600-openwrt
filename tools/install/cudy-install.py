@@ -335,6 +335,52 @@ sync; echo "slot $other is now the boot slot, rebooting"; ( sleep 2; reboot ) >/
     return 0
 
 
+GROW_SH = r"""
+v=%(vol)d; need=%(need)d
+d=/sys/class/ubi/ubi0_$v
+[ -d "$d" ] || { echo "NODEV"; exit 1; }
+leb=$(cat $d/usable_eb_size); ebs=$(cat $d/reserved_ebs)
+cap=$((leb * ebs))
+if [ "$cap" -ge "$need" ]; then echo "OK $cap"; exit 0; fi
+want=$(( (need + leb - 1) / leb ))
+add=$((want - ebs))
+avail=$(cat /sys/class/ubi/ubi0/avail_eraseblocks 2>/dev/null || echo 0)
+if [ "$avail" -lt "$add" ]; then
+	echo "NOSPACE $cap $need $add $avail"; exit 1
+fi
+command -v ubirsvol >/dev/null || { echo "NORSVOL"; exit 1; }
+ubirsvol /dev/ubi0 -n $v -S $want || { echo "RSVOLFAIL"; exit 1; }
+cap2=$(( $(cat $d/usable_eb_size) * $(cat $d/reserved_ebs) ))
+[ "$cap2" -ge "$need" ] || { echo "TOOSMALL $cap2"; exit 1; }
+echo "GREW $cap $cap2"
+"""
+
+
+def grow_volume(ssh, vol, need):
+    """Grow the UBI volume behind /dev/ubi0_N so `need` bytes fit."""
+    vid = int(vol.rsplit("_", 1)[1])
+    r = ssh.run(GROW_SH % {"vol": vid, "need": need}, check=False)
+    out = (r.stdout + r.stderr).strip()
+    first = out.split("\n")[0].split() if out else [""]
+
+    if first[0] == "OK":
+        return
+    if first[0] == "GREW":
+        say("%s grown from %s to %s bytes (our image needs %d)"
+            % (vol, first[1], first[2], need))
+        return
+    if first[0] == "NORSVOL":
+        die("%s is too small for our image and this firmware has no ubirsvol to "
+            "grow it. Nothing was written." % vol)
+    if first[0] == "NOSPACE":
+        die("%s holds %s bytes, our image needs %s, and UBI has only %s free "
+            "eraseblocks (%s more are required).\n"
+            "     Nothing was written. This router's flash layout leaves no room; "
+            "please report it in the thread with the output of 'ubinfo -a'."
+            % (vol, first[1], first[2], first[4], first[3]))
+    die("could not resize %s: %s" % (vol, out))
+
+
 def which_or_die(prog):
     from shutil import which
     if not which(prog):
@@ -479,8 +525,18 @@ def main():
         die("checksum mismatch after copy:\n" + r.stdout)
     say("copied, checksums match")
 
-    # ---- 4: write the slot -------------------------------------------------
+    # ---- 4: make sure the volumes are big enough ---------------------------
+    # The factory rootfs1 is 184 LEB (23 363 584 bytes) and our rootfs is
+    # larger, so a fresh router refuses the write with
+    #   "will not fit volume /dev/ubi0_4".
+    # UBI can grow a volume in place, and the stock firmware ships ubirsvol,
+    # so do that first - before anything is written, so a router that has no
+    # free eraseblocks is left exactly as it was.
     bvol, rvol = SLOT_VOLUMES[a.slot]
+    for vol, path in ((bvol, a.bootfs), (rvol, a.rootfs)):
+        grow_volume(ssh, vol, os.path.getsize(path))
+
+    # ---- 5: write the slot -------------------------------------------------
     say("writing slot %d: %s <- bootfs, %s <- rootfs" % (a.slot, bvol, rvol))
     ssh.run("ubiupdatevol %s /tmp/bootfs.itb && ubiupdatevol %s /tmp/rootfs.sq && sync"
             % (bvol, rvol), timeout=900)
@@ -491,7 +547,7 @@ def main():
         die("readback checksum mismatch — NOT switching the boot slot:\n" + r.stdout)
     say("written and verified")
 
-    # ---- 5: boot slot ------------------------------------------------------
+    # ---- 6: boot slot ------------------------------------------------------
     if a.no_commit:
         # ACTIVATE: the next reset boots the non-committed slot exactly once
         ssh.run("bcm_bootstate +%d >/dev/null 2>&1; echo 1 > /proc/bootstate/reset_reason" % a.slot,

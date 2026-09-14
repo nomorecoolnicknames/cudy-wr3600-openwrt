@@ -289,10 +289,15 @@ bool pmc6764_ready(void);
 #define SF2_BRCM_HDR_TX_DIS		0x01310
 #define SF2_BRCM_HDR_PORTS_MASK		0x1ff
 
-/* Root SF2 ports of the split map: WAN is the internal GPHY (P0), LAN is the
- * serdes port feeding the external 53134 (P5). */
-#define SP_SPLIT_WAN_PORT		0
+/* Root SF2 ports of the split map.  Defaults are the WR3600 (R77) wiring:
+ * WAN is the internal GPHY (P0), LAN is the serdes port feeding the external
+ * 53134 (P5).  The WR3600H (R69) disables the internal GPHY and puts its
+ * 2.5G WAN on port_sgmii1 (P6, serdes core 1 -> external cascade PHY), so the
+ * WAN port is a module parameter; LAN is the same P5 on both boards. */
+#define SP_SPLIT_WAN_PORT_DEFAULT	0
 #define SP_SPLIT_LAN_PORT		5
+extern unsigned int enet6764_wan_port;
+#define SP_SPLIT_WAN_PORT		enet6764_wan_port
 #define SP_MAX_NETDEVS			2
 
 enum sp_role {
@@ -340,6 +345,17 @@ extern unsigned int enet6764_wan_port_sel;
 #define ETHSW_MDIO_C22_PHY_REG_SHIFT	16
 #define ETHSW_MDIO_C22_PHY_REG_MASK	(0x1f << ETHSW_MDIO_C22_PHY_REG_SHIFT)
 #define ETHSW_MDIO_PHY_DATA_MASK	0xffff
+
+/* Clause-45 on the same controller (vendor mdio_drv_common.c:50-65): the CFG
+ * register selects the clause (bit0: 0 = clause 45, 1 = clause 22) and a C45
+ * access is two commands - an ADDRESS phase carrying the register number in
+ * the data field, then READ/WRITE.  The device address goes where C22 puts
+ * the register number (bits 20:16).  Needed for the WR3600H cascade PHY. */
+#define ETHSW_MDIO_CFG_CLAUSE22		(1u << 0)
+#define ETHSW_MDIO_CMD_C45_ADDRESS	0
+#define ETHSW_MDIO_CMD_C45_WRITE	1
+#define ETHSW_MDIO_CMD_C45_READ		3
+#define ETHSW_MDIO_C45_DEV_SHIFT	ETHSW_MDIO_C22_PHY_REG_SHIFT
 #define BCM_PHY_ID_M			0x1f
 
 /* ================================================================== */

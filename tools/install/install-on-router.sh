@@ -52,8 +52,31 @@ done
 bsize=$(wc -c < "$BOOTFS")
 rsize=$(wc -c < "$ROOTFS")
 [ "$bsize" -le "$BOOTFS_MAX" ] || die "bootfs is $bsize bytes; over 27 LEB ($BOOTFS_MAX) it does not boot"
-rmax=$(cat /sys/class/ubi/ubi0_$((SLOT * 2 + 2))/reserved_ebs 2>/dev/null || echo 0)
-[ "$rmax" = 0 ] || [ "$rsize" -le $((rmax * LEB)) ] || die "rootfs ($rsize) larger than the volume ($((rmax * LEB)))"
+# The factory rootfs1 is 184 LEB and our rootfs is bigger, so a fresh router
+# would refuse the write ("will not fit volume /dev/ubi0_4"). UBI can grow a
+# volume in place and the stock firmware ships ubirsvol, so do it before
+# anything is written: a router without free eraseblocks stays untouched.
+grow_vol() {	# $1 = /dev/ubi0_N, $2 = bytes needed
+	local v=${1##*_} need=$2 d leb ebs cap want add avail cap2
+
+	d=/sys/class/ubi/ubi0_$v
+	[ -d "$d" ] || die "no such UBI volume: $1"
+	leb=$(cat "$d/usable_eb_size"); ebs=$(cat "$d/reserved_ebs")
+	cap=$((leb * ebs))
+	[ "$cap" -ge "$need" ] && return 0
+
+	want=$(( (need + leb - 1) / leb ))
+	add=$((want - ebs))
+	avail=$(cat /sys/class/ubi/ubi0/avail_eraseblocks 2>/dev/null || echo 0)
+	[ "$avail" -ge "$add" ] || die "$1 holds $cap bytes, the image needs $need, and UBI has only $avail free eraseblocks ($add more required). Nothing was written."
+	command -v ubirsvol >/dev/null || die "$1 is too small and there is no ubirsvol on this firmware"
+	say "growing $1: $cap -> $((want * leb)) bytes"
+	ubirsvol /dev/ubi0 -n "$v" -S "$want" || die "ubirsvol failed on $1"
+	cap2=$(( $(cat "$d/usable_eb_size") * $(cat "$d/reserved_ebs") ))
+	[ "$cap2" -ge "$need" ] || die "$1 is still too small after the resize ($cap2)"
+}
+grow_vol "$BVOL" "$bsize"
+grow_vol "$RVOL" "$rsize"
 
 bsha=$(sha256sum "$BOOTFS" | cut -c1-64)
 rsha=$(sha256sum "$ROOTFS" | cut -c1-64)
