@@ -41,7 +41,7 @@ cp -a "$R/kernel-6.6/pkgs" "$DEST/kernel/"          # vendored OpenWrt ipks (wif
 rsync -a "${EXCL[@]}" "$R/kernel-6.6/port/" "$DEST/kernel/port/"
 
 say "out-of-tree modules"
-for d in enet66 enet66b leds66 reboot66 shim66 vpcie66; do
+for d in enet66 enet66b cascade66 leds66 reboot66 shim66 vpcie66; do
 	mkdir -p "$DEST/port66/$d"
 	rsync -a "${EXCL[@]}" "$R/port66/$d/" "$DEST/port66/$d/"
 done
@@ -69,14 +69,18 @@ The Broadcom Wi-Fi driver binaries used by the release images (wl.ko, hnd.ko,
 wlshared.ko) are proprietary, are not part of this repository, and are taken
 from the factory firmware of the device itself.
 EOF
+# Build outputs only.  Do NOT put "*.d" or "modules.order" here: gitignore
+# patterns match directories too, so "*.d" swallowed etc/init.d/ whole (the
+# wifi66 init script and the LuCI updater's menu.d/acl.d files were missing
+# from the published tree until 2026-09-17), and "modules.order" is a real
+# source file in kernel/initramfs-release/.  Kernel dependency files never
+# reach this tree anyway - rsync drops them on the way in.
 cat > "$DEST/.gitignore" <<'EOF'
 *.ko
 *.o
 *.mod
 *.mod.c
 *.cmd
-*.d
-modules.order
 Module.symvers
 __pycache__/
 *.pyc

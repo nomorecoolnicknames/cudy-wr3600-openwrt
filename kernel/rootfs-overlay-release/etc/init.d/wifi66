@@ -1,0 +1,164 @@
+#!/bin/sh /etc/rc.common
+# BCM6764 (Cudy WR3600): stock wl.ko 4.19 blob via bcm_shim + netfilter + AP + NAT.
+# START=18 -> runs before network(20)/podkop(99): creates wl0/wl1 so the LAN
+# bridge and podkop's tproxy source interface (br-lan) exist in time.
+#
+# Wired ports: enet6764 defaults to split=0, i.e. one eth0 covering every
+# switch port (WAN role, DHCP client). The WAN/LAN split (split=1) is not
+# enabled in this release: the WAN GPHY (P0) does not link yet. If a future
+# bootfs loads split=1, eth1 appears and is bridged into the LAN automatically.
+START=18
+STOP=92
+L() { echo "wifi66: $*" > /dev/kmsg; }
+start() {
+	echo 4 > /proc/sys/kernel/printk 2>/dev/null
+	insmod /lib/modules/6.6.93/reboot6764.ko 2>/dev/null
+	for m in enet6764 serdes6764 extsw6764 leds-bca-cled; do
+		insmod /lib/modules/6.6.93/$m.ko 2>/dev/null
+	done
+	# WR3600H (R69): the WAN is not the internal GPHY but an external 2.5G
+	# copper PHY on SF2 port 6. The device tree tells the two boards apart -
+	# on the plain WR3600 port_sgmii1 is disabled and this is skipped.
+	for f in /proc/device-tree/*/sf2*/ports/port_sgmii1/status \
+		 /proc/device-tree/sf2*/ports/port_sgmii1/status; do
+		[ -f "$f" ] || continue
+		[ "$(tr -d '\000' < "$f")" = "okay" ] || continue
+		insmod /lib/modules/6.6.93/cascade6764.ko 2>/dev/null
+		break
+	done
+	for m in ipv6 nfnetlink nf_tables nf_conntrack nf_defrag_ipv4 nf_defrag_ipv6 \
+		 nf_nat nf_tproxy_ipv4 nf_tproxy_ipv6 nf_socket_ipv4 nf_socket_ipv6 \
+		 nft_ct nft_socket nft_tproxy nft_nat nft_masq nft_redir nft_chain_nat \
+		 nft_fib nft_fib_ipv4 nft_log nft_reject nft_reject_ipv4 nft_reject_ipv6 \
+		 nft_reject_inet nft_limit tun sch_cake sch_fq_codel sch_htb tcp_bbr \
+		 llc stp bridge; do
+		insmod /lib/modules/6.6.93/$m.ko 2>/dev/null
+	done
+	insmod /lib/modules/6.6.93/cfg80211.ko 2>/dev/null
+	insmod /lib/modules/6.6.93/h30_ubus_all.ko port_mask=127 2>/dev/null
+	insmod /lib/modules/6.6.93/vpcie66.ko 2>/dev/null
+	insmod /lib/modules/6.6.93/h30_irqgate.ko 2>/dev/null
+	# Base MAC for the radios: the blob derives wl0/wl1 from et0macaddr
+	# (+2/+3, the stock bdinfo convention); sysport put the factory base
+	# address on eth1 (LAN), so take it from there.
+	base=$(cat /sys/class/net/eth1/address 2>/dev/null)
+	case "$base" in
+	??:??:??:??:??:??) ;;
+	*) base=02:10:18:00:00:01 ;;
+	esac
+	insmod /lib/modules/6.6.93/bcm_shim.ko xmit_handshake=1 et0macaddr="$base" 2>/dev/null
+	insmod /lib/modules/6.6.93/h30_bpm_live.ko enable=1 disable_xpm=1 2>/dev/null
+	/usr/bin/insmodf /lib/modules/blobs/wlshared.ko 2>/dev/null
+	/usr/bin/insmodf /lib/modules/blobs/hnd.ko 2>/dev/null
+	/usr/bin/insmodf /lib/modules/blobs/wl.ko 2>/dev/null
+	[ -r /sys/module/hnd/sections/.text ] && \
+		echo "$(cat /sys/module/hnd/sections/.text)" \
+			> /sys/module/bcm_shim/parameters/open_trace_hnd_text 2>/dev/null
+	for irq in 30 31 33 34 35 40 41 43 44 45; do
+		echo "$irq" > /sys/module/h30_irqgate/parameters/release 2>/dev/null
+	done
+	# Critical modules: without them there is no Wi-Fi at all, and a silent
+	# failure only shows up as "no SSID". Say which one is missing.
+	for m in bcm_shim hnd wl wlshared; do
+		if ! lsmod | grep -q "^$m "; then
+			L "FATAL: module $m did not load (insmod failed earlier)"
+		fi
+	done
+	L "modules loaded: wl=$(lsmod | grep -c '^wl ') hnd=$(lsmod | grep -c '^hnd ') shim=$(lsmod | grep -c '^bcm_shim ')"
+	# --- APs: since 2026-09-11 hostapd is started by netifd from
+	# /etc/config/wireless (LuCI -> Wireless) through our driver script
+	# /lib/netifd/wireless/mac80211.sh, which also puts wl0/wl1 into br-lan.
+	# The default SSID/passphrase stay predictable on purpose: the firmware
+	# is installed and updated over Wi-Fi by the users themselves; the WAN
+	# input filter (below) keeps the internet side out.
+	# --- LAN bridge over both radios (and over eth1 if the split is loaded) ---
+	ip link add br-lan type bridge 2>/dev/null
+	# wl0/wl1 join br-lan from the netifd driver AFTER hostapd is up:
+	# enslaving them first made the blob's start_ap fail (bench 2026-09-12)
+	if [ -e /sys/class/net/eth1 ]; then
+		ip link set eth1 up 2>/dev/null
+		ip link set eth1 master br-lan 2>/dev/null
+	fi
+	ip addr add 192.168.10.1/24 dev br-lan 2>/dev/null
+	ip link set br-lan up
+	# --- DHCP/DNS for LAN (own instance; OpenWrt dnsmasq service is disabled
+	# because the LAN bridge is not a netifd interface) ---
+	# loopback must be up before dnsmasq binds to it: /etc/resolv.conf points
+	# at 127.0.0.1, so the router itself (and podkop's DNS checks) need a
+	# resolver there. netifd brings lo up later, at S20.
+	ip link set lo up 2>/dev/null
+	kill $(pgrep dnsmasq) 2>/dev/null
+	# Upstream resolvers. Default "auto": whatever the WAN lease handed us,
+	# i.e. the router this one is plugged into. netifd writes them to
+	# resolv.conf.auto at S20 (after us), and dnsmasq re-reads that file when
+	# it changes, so the seed below only answers until the lease arrives.
+	# Hardcoding a public resolver here (it used to be 8.8.8.8) silently took
+	# DNS away from the upstream router - no DoT, no DNS-based filtering,
+	# reported from the field.  /etc/config/wifi66: option dns 'auto' or an
+	# explicit list, e.g. option dns '1.1.1.1 9.9.9.9'.
+	DNSUP=$(uci -q get wifi66.settings.dns)
+	RESOLV=/tmp/resolv.conf.d/resolv.conf.auto
+	case "$DNSUP" in
+	""|auto)
+		mkdir -p /tmp/resolv.conf.d
+		[ -s "$RESOLV" ] || printf 'nameserver 8.8.8.8\n' > "$RESOLV"
+		DNSARGS="--resolv-file=$RESOLV"
+		;;
+	*)
+		DNSARGS="--no-resolv"
+		for d in $DNSUP; do DNSARGS="$DNSARGS --server=$d"; done
+		;;
+	esac
+	L "dns upstream: ${DNSUP:-auto} ($DNSARGS)"
+	dnsmasq --port=53 --no-hosts --interface=br-lan --interface=lo \
+		--bind-interfaces $DNSARGS \
+		--dhcp-range=192.168.10.100,192.168.10.200,255.255.255.0,12h \
+		--dhcp-option=3,192.168.10.1 --dhcp-option=6,192.168.10.1 \
+		--dhcp-leasefile=/tmp/dhcp.leases --pid-file=/tmp/dnsmasq.pid \
+		--log-dhcp --log-facility=/tmp/dnsmasq.log 2>/dev/null
+	# --- NAT + forwarding (fw4 is disabled: its ruleset needs kernel bits we skip) ---
+	nft add table ip nat66 2>/dev/null
+	nft add chain ip nat66 post '{ type nat hook postrouting priority srcnat; }' 2>/dev/null
+	nft add rule ip nat66 post ip saddr 192.168.10.0/24 oifname eth0 masquerade 2>/dev/null
+	nft add table inet fwd66 2>/dev/null
+	nft add chain inet fwd66 fw '{ type filter hook forward priority -200; policy accept; }' 2>/dev/null
+	nft add rule inet fwd66 fw ip saddr 192.168.10.0/24 accept 2>/dev/null
+	nft add rule inet fwd66 fw ip daddr 192.168.10.0/24 accept 2>/dev/null
+	# --- input policy. The wired side is the WAN, and dropbear/uhttpd listen on
+	# every address, so without this a box on a public uplink is root-open to the
+	# internet. Admin access (22/80/443) from eth0 is governed by
+	# /etc/config/wifi66 wan_admin: "private" (default) = only from RFC1918
+	# sources, i.e. a home LAN behind another router; "1" = always; "0" = never.
+	# Everything the router needs itself (DHCP lease, DNS/NTP replies, ICMP)
+	# stays allowed; LAN (br-lan, eth1 when split) is unrestricted. ---
+	nft add chain inet fwd66 in '{ type filter hook input priority 0; policy drop; }' 2>/dev/null
+	nft flush chain inet fwd66 in 2>/dev/null
+	nft add rule inet fwd66 in iifname lo accept
+	nft add rule inet fwd66 in ct state established,related accept
+	nft add rule inet fwd66 in iifname br-lan accept
+	nft add rule inet fwd66 in iifname eth1 accept
+	nft add rule inet fwd66 in meta l4proto icmp accept
+	nft add rule inet fwd66 in meta l4proto ipv6-icmp accept
+	nft add rule inet fwd66 in udp dport 68 accept
+	case "$(uci -q get wifi66.settings.wan_admin)" in
+	1)       nft add rule inet fwd66 in iifname eth0 tcp dport '{ 22, 80, 443 }' accept ;;
+	0)       ;;
+	*)       nft add rule inet fwd66 in iifname eth0 ip saddr '{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }' tcp dport '{ 22, 80, 443 }' accept ;;
+	esac
+	# The kernel kicks the watchdog only until this deadline (boot-time
+	# safety net: an unreachable userspace falls back to the other slot).
+	# 0 = no deadline. The earlier 86400 here made a healthy router reset
+	# once a day (found on the bench at uptime 23:19).
+	echo 0 > /proc/bcm96764_wdt_kick_secs 2>/dev/null
+	L "lan/nat ready: $(ip -4 addr show br-lan 2>/dev/null | grep -c inet) $(nft list table ip nat66 2>/dev/null | grep -c masquerade)"
+}
+stop() {
+	# Called by "wifi66 stop/restart" and by procd at shutdown. Deliberately
+	# does NOT stop hostapd or bring the radios down: the blob's stop_ap on
+	# a live AP hangs the SoC (bench 2026-09-09, 2026-09-12). At reboot the
+	# kernel's reboot notifier arms the watchdog first, so a hang there is
+	# harmless; anywhere else it is a power cycle. Only the userspace
+	# helpers we own are stopped. WIFI66_UNLOAD=1 is no longer honoured.
+	killall -q dnsmasq 2>/dev/null
+	L "stop: dnsmasq stopped; radios and hostapd left running (a live AP cannot be torn down on this blob)"
+}

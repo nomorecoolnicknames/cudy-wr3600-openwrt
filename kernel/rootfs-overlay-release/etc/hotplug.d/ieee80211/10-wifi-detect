@@ -1,0 +1,3 @@
+#!/bin/sh
+# Cudy WR3600: no wifi auto-detection (see /lib/wifi/mac80211.uc)
+exit 0

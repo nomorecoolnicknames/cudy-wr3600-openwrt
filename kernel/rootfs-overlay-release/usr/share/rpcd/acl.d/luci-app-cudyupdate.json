@@ -1,0 +1,21 @@
+{
+	"luci-app-cudyupdate": {
+		"description": "Firmware update from GitHub and return to the factory firmware",
+		"read": {
+			"file": {
+				"/usr/bin/cudy-update check": [ "exec" ],
+				"/usr/bin/cudy-update status": [ "exec" ],
+				"/usr/bin/cudy-update slots": [ "exec" ],
+				"/etc/cudy-release": [ "read" ]
+			}
+		},
+		"write": {
+			"file": {
+				"/usr/bin/cudy-update install": [ "exec" ],
+				"/usr/bin/cudy-update install --force": [ "exec" ],
+				"/usr/bin/cudy-update to-stock": [ "exec" ],
+				"/usr/bin/cudy-update to-stock --force": [ "exec" ]
+			}
+		}
+	}
+}
