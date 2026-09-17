@@ -52,8 +52,8 @@ for m in $(cat /modules.order 2>/dev/null); do
 	insmod "/$m" $a
 done
 
-# On the WR3600H, report what the external WAN PHY says (read-only CL45).
-[ "$H_WAN" = 1 ] && [ -f /cascade_probe.ko ] && insmod /cascade_probe.ko
+# The WR3600H's external WAN PHY is driven from the rootfs (/etc/init.d/wifi66):
+# it may need a firmware upload, and /lib/firmware only exists there.
 echo 300 > /proc/bcm96764_wdt_kick_secs 2>/dev/null
 ip link set eth0 up 2>/dev/null
 mark 0x23

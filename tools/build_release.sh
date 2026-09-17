@@ -110,15 +110,15 @@ mod port66/leds66 ""
 mod bsp-6.6/compat ""
 mod port66/shim66 "$R/bsp-6.6/compat/Module.symvers $R/port66/enet66/Module.symvers"
 mod port66/reboot66 ""
-# WR3600H only: read-out of the external 2.5G cascade PHY. Loaded by the
-# initramfs when the device tree says this is an R69 board.
-mod obs/cascade "$R/port66/enet66/Module.symvers"
+# WR3600H only: the external 2.5G cascade WAN PHY. Loaded from the rootfs
+# when the device tree says this is an R69 board.
+mod port66/cascade66 "$R/port66/enet66/Module.symvers $R/port66/enet66b/Module.symvers"
 for m in port66/enet66/enet6764.ko port66/enet66b/serdes6764.ko \
          port66/enet66b/extsw6764.ko port66/leds66/leds-bca-cled.ko \
          port66/vpcie66/vpcie66.ko bsp-6.6/compat/bcm_shim.ko \
          port66/shim66/h30_bpm_live.ko port66/shim66/h30_ubus_all.ko \
          port66/shim66/h30_irqgate.ko port66/reboot66/reboot6764.ko \
-         obs/cascade/cascade_probe.ko; do
+         port66/cascade66/cascade6764.ko; do
 	need "$R/$m"
 done
 
@@ -280,7 +280,15 @@ cp "$R/port66/enet66/enet6764.ko" "$R/port66/enet66b/serdes6764.ko" \
    "$R/port66/vpcie66/vpcie66.ko" "$R/bsp-6.6/compat/bcm_shim.ko" \
    "$R/port66/shim66/h30_bpm_live.ko" "$R/port66/shim66/h30_ubus_all.ko" \
    "$R/port66/shim66/h30_irqgate.ko" "$R/port66/reboot66/reboot6764.ko" \
+   "$R/port66/cascade66/cascade6764.ko" \
    "$KM/"
+# Firmware for the WR3600H WAN PHY.  The stock bootloader normally uploads it
+# already (its R69 defconfig has CONFIG_BCM_PHY_BLACKFIN_B0=y), so this is the
+# fallback path; it is a Broadcom blob from Cudy's own GPL release, taken from
+# the source tree at build time and deliberately not kept in git.
+mkdir -p "$W/rootfs/lib/firmware"
+cp "$R/gpl/openwrt/21.02/package/extra/bcm/src/bcmdrivers/opensource/phy/firmware/blackfin_b0_firmware.bin" \
+   "$W/rootfs/lib/firmware/blackfin_b0_firmware.bin"
 cp "$BLOBS/wl-h7.ko"        "$W/rootfs/lib/modules/blobs/wl.ko"
 cp "$BLOBS/hnd-h7.ko"       "$W/rootfs/lib/modules/blobs/hnd.ko"
 cp "$BLOBS/wlshared-h7.ko"  "$W/rootfs/lib/modules/blobs/wlshared.ko"

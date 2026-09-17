@@ -172,6 +172,37 @@ struct sf2_6764 *sf2_6764_get(void)
 	return g_sf2;
 }
 
+/* Drive an SF2 port's MAC-state override from an out-of-band link event.
+ *
+ * A port fed by a cascade PHY (WR3600H WAN: P6 <- serdes core 1 <- external
+ * 2.5G copper PHY) gets no in-band status, so whoever does know the copper
+ * link has to write the MAC state here or the port stays dead.  Same encoding
+ * as U-Boot's port_sf2mac_cfg_set() (UB mac_drv_sf2.c): OVERRIDE | speed |
+ * FDX | LNK, flow control left off.
+ */
+int sf2_6764_force_port_state(int port, int mbps, bool link)
+{
+	u32 ov = 0x40;			/* REG_PORT_STATE_OVERRIDE */
+
+	if (!g_sf2 || port < 0 || port > 7)
+		return -EINVAL;
+
+	if (link) {
+		switch (mbps) {
+		case 2500: ov |= 0x0c; break;
+		case 1000: ov |= 0x08; break;
+		case 100:  ov |= 0x04; break;
+		case 10:   break;	/* speed field 0 */
+		default:   return -EINVAL;
+		}
+		ov |= 0x02 | 0x01;	/* FDX | LNK */
+	}
+
+	sf2_wr32(g_sf2, SF2_STS_OVERRIDE_P(port), ov);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(sf2_6764_force_port_state);
+
 /* ------------------------------------------------------------------ */
 /* switch core register access                                        */
 /* ------------------------------------------------------------------ */

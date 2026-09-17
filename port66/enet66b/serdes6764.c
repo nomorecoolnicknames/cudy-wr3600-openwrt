@@ -141,7 +141,11 @@ MODULE_PARM_DESC(double_init,
 static void __iomem *sd_base;		/* brcm,serdes1     phys 0x80282000 */
 static void __iomem *ethtop_base;	/* brcm,eth-phy-top phys 0x80280000 */
 static DEFINE_MUTEX(sd_lock);
-static bool sd_inited;
+/* One bit per core: the full Merlin init (ucode download included) is done
+ * once per core, the speed set as often as the link needs it.  This has to be
+ * per core - a single flag made the WR3600H's core 1 skip its own init
+ * because core 0 had already run. */
+static unsigned int sd_inited_mask;
 
 /* ------------------------------ serdes block register map (core 0) ------ */
 /* serdes_access_6764.h:22..36 */
@@ -1504,7 +1508,7 @@ int serdes6764_init_2p5g(void)
 	 * XFI polarity inversion, a second full init at 1G, then the speed set
 	 * to FORCE 2P5G on the 10.3125GHz VCO (vco_rate 19 in the stock log).
 	 * No polarity write afterwards. */
-	if (!sd_inited) {
+	if (!(sd_inited_mask & (1u << sd_core))) {
 		ret = merlin16_serdes_init();
 		if (ret)
 			goto out;
@@ -1516,7 +1520,7 @@ int serdes6764_init_2p5g(void)
 			if (ret)
 				goto out;
 		}
-		sd_inited = true;
+		sd_inited_mask |= 1u << sd_core;
 	}
 
 	ret = merline_speed_set_core(!!p2_vco12p5, force_speed_2p5g, 0x0003);
@@ -1548,6 +1552,52 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(serdes6764_init_2p5g);
+
+/*
+ * Retune an already brought-up core to a different line rate.
+ *
+ * The WR3600H's WAN cascade PHY (port66/cascade66) presents its host side as
+ * 1000Base-X or 2500Base-X depending on what the copper side negotiated with
+ * the ISP, so the serdes has to follow the copper link instead of staying on
+ * the forced 2.5G the LAN uplink uses.  Only the speed pass is repeated; the
+ * Merlin core init and the ucode stay as they are.
+ *
+ * mbps is 1000 or 2500.  Returns 0, or a negative errno.
+ */
+int serdes6764_speed_set(int core, int mbps)
+{
+	int ret, save_core, save_prtad;
+
+	if (core < 0 || core >= SD_MAX_CORES || !sd_base)
+		return -EINVAL;
+
+	mutex_lock(&sd_lock);
+	if (!(sd_inited_mask & (1u << core))) {
+		mutex_unlock(&sd_lock);
+		return -ENODEV;
+	}
+	save_core = sd_core;
+	save_prtad = sd_prtad;
+	sd_core = core;
+	sd_prtad = core_prtad(core);
+
+	if (mbps == 2500)
+		ret = merline_speed_set_core(!!p2_vco12p5, force_speed_2p5g,
+					     0x0003 /* MLN_SPD_FORCE_2P5G */);
+	else if (mbps == 1000)
+		ret = merline_speed_set_core(false, force_speed_1g,
+					     0x0002 /* MLN_SPD_FORCE_1G */);
+	else
+		ret = -EINVAL;
+
+	pr_info(DRV ": core %d: line rate -> %d Mbps (%d)\n", core, mbps, ret);
+
+	sd_core = save_core;
+	sd_prtad = save_prtad;
+	mutex_unlock(&sd_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(serdes6764_speed_set);
 
 /*
  * phy_drv_146class_serdes.c:332..335 -> merlin_chk_lane_link_status()
