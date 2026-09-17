@@ -41,6 +41,8 @@ Usage:
         the factory slot. Use this for the very first try.)
 """
 import argparse
+import json
+import base64
 import hashlib
 import http.cookiejar
 import os
@@ -158,15 +160,41 @@ class StockWeb:
         csrf = self.grab("_csrf", html)
         salt = self.grab("salt", html)
         token = self.grab("token", html)
-        if not salt:
-            die("no login form found — is %s the stock web interface?" % self.base)
-        h = hashlib.sha256((self.password + salt).encode()).hexdigest()
-        h2 = hashlib.sha256((h + token).encode()).hexdigest()
-        data = urllib.parse.urlencode({
-            "_csrf": csrf, "salt": salt, "token": token,
-            "zonename": "UTC", "timeclock": str(int(time.time())),
-            "luci_username": "admin", "luci_password": h2,
-        }).encode()
+
+        fields = {"_csrf": csrf, "zonename": "UTC",
+                  "timeclock": str(int(time.time())), "luci_username": "admin"}
+
+        if salt:
+            # <= 2.3.x: the form carries salt and token
+            h = hashlib.sha256((self.password + salt).encode()).hexdigest()
+            fields["salt"], fields["token"] = salt, token
+            fields["luci_password"] = hashlib.sha256((h + token).encode()).hexdigest()
+        else:
+            # >= 2.5.x: ask for the challenge, answer it RSA-OAEP encrypted
+            st, body = self.fetch(
+                "/cgi-bin/luci/admin/login",
+                data=urllib.parse.urlencode({"username": "admin"}).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded",
+                         "X-Requested-With": "XMLHttpRequest"})
+            try:
+                ch = json.loads(body.decode("utf-8", "replace"))
+            except ValueError:
+                die("this does not look like the stock web interface of a Cudy "
+                    "router: no salt in the login form and /admin/login did not "
+                    "answer with JSON (%s)" % self.base)
+            if not ch.get("key") or not ch.get("salt"):
+                die("the router's login challenge has no key/salt: %.200s" % body)
+            passhash = stock_passhash(self.password, ch["salt"],
+                                      ch.get("nonce"), ch.get("kdfiter"))
+            try:
+                key = base64.b64decode(ch["key"])
+                n, e = parse_rsa_pubkey(key)
+                fields["luci_password"] = rsa_oaep_encrypt(passhash, n, e)
+            except Exception as exc:
+                die("cannot use the router's login key: %s" % exc)
+            say("stock 2.5-style login (challenge + RSA-OAEP)")
+
+        data = urllib.parse.urlencode(fields).encode()
         st, body = self.fetch("/cgi-bin/luci/admin/wizard", data=data,
                               headers={"Content-Type": "application/x-www-form-urlencoded"})
         # The session cookie is the truth. The response body is not: a
@@ -381,6 +409,111 @@ def grow_volume(ssh, vol, need):
     die("could not resize %s: %s" % (vol, out))
 
 
+
+# ---------------------------------------------------------------------------
+# Stock 2.5.x login: challenge + RSA-OAEP
+#
+# The older firmware put "salt" and "token" straight into the login form and
+# wanted sha256(sha256(pw+salt)+token).  From 2.5.x the form carries neither:
+# the page POSTs to /cgi-bin/luci/admin/login first and gets back
+# {salt, nonce, kdfiter, key}, hashes the password with PBKDF2-HMAC-SHA256 (or
+# plain sha256 when kdfiter is 0), folds the nonce in, and sends the result
+# RSA-OAEP encrypted with the router's public key.  Reading the firmware's own
+# jsencrypt (the padding reserves 2*32 bytes and draws a 32-byte seed) pins the
+# OAEP digest to SHA-256, MGF1-SHA-256, empty label.
+#
+# All of it is stdlib, so the installer still needs nothing but Python.
+# ---------------------------------------------------------------------------
+
+
+def _der_len(buf, i):
+    n = buf[i]; i += 1
+    if n < 0x80:
+        return n, i
+    k = n & 0x7f
+    return int.from_bytes(buf[i:i + k], "big"), i + k
+
+
+def _der_seq(buf, i):
+    if buf[i] != 0x30:
+        raise ValueError("not a DER sequence")
+    ln, i = _der_len(buf, i + 1)
+    return i, i + ln
+
+
+def _der_int(buf, i):
+    if buf[i] != 0x02:
+        raise ValueError("not a DER integer")
+    ln, j = _der_len(buf, i + 1)
+    return int.from_bytes(buf[j:j + ln], "big"), j + ln
+
+
+def parse_rsa_pubkey(blob):
+    """(n, e) from a PKCS#1 RSAPublicKey or a SubjectPublicKeyInfo, DER or PEM."""
+    if isinstance(blob, str):
+        blob = blob.encode()
+    if b"-----BEGIN" in blob:
+        body = b"".join(l.strip() for l in blob.splitlines()
+                        if b"-----" not in l)
+        blob = base64.b64decode(body)
+    i, end = _der_seq(blob, 0)
+    if blob[i] == 0x02:                       # PKCS#1: SEQUENCE { n, e }
+        n, i = _der_int(blob, i)
+        e, _ = _der_int(blob, i)
+        return n, e
+    # SubjectPublicKeyInfo: SEQUENCE { AlgorithmIdentifier, BIT STRING }
+    ai, ai_end = _der_seq(blob, i)
+    i = ai_end
+    if blob[i] != 0x03:
+        raise ValueError("no BIT STRING in the public key")
+    ln, j = _der_len(blob, i + 1)
+    inner = blob[j + 1:j + ln]                # skip the unused-bits byte
+    i, _ = _der_seq(inner, 0)
+    n, i = _der_int(inner, i)
+    e, _ = _der_int(inner, i)
+    return n, e
+
+
+def _mgf1(seed, length):
+    out = b""
+    counter = 0
+    while len(out) < length:
+        out += hashlib.sha256(seed + counter.to_bytes(4, "big")).digest()
+        counter += 1
+    return out[:length]
+
+
+def rsa_oaep_encrypt(message, n, e):
+    """RSA-OAEP (SHA-256, MGF1-SHA-256, empty label) -> base64, stdlib only."""
+    if isinstance(message, str):
+        message = message.encode()
+    k = (n.bit_length() + 7) // 8
+    hlen = 32
+    if len(message) > k - 2 * hlen - 2:
+        raise ValueError("message too long for this key")
+    lhash = hashlib.sha256(b"").digest()
+    ps = b"\x00" * (k - len(message) - 2 * hlen - 2)
+    db = lhash + ps + b"\x01" + message
+    seed = os.urandom(hlen)
+    masked_db = bytes(a ^ b for a, b in zip(db, _mgf1(seed, k - hlen - 1)))
+    masked_seed = bytes(a ^ b for a, b in zip(seed, _mgf1(masked_db, hlen)))
+    em = b"\x00" + masked_seed + masked_db
+    c = pow(int.from_bytes(em, "big"), e, n)
+    return base64.b64encode(c.to_bytes(k, "big")).decode()
+
+
+def stock_passhash(password, salt, nonce, kdfiter):
+    """The hash the 2.5.x login page computes (sysauth.js)."""
+    if kdfiter and int(kdfiter) > 0:
+        h = hashlib.pbkdf2_hmac("sha256", password.encode(),
+                                bytes.fromhex(salt), int(kdfiter), 32).hex()
+    else:
+        h = hashlib.sha256((password + salt).encode()).hexdigest()
+    if nonce:
+        h = hashlib.sha256((h + nonce).encode()).hexdigest()
+    return h
+
+
 def which_or_die(prog):
     from shutil import which
     if not which(prog):
@@ -395,7 +528,8 @@ def main():
     ap.add_argument("rootfs", nargs="?", help="rootfs.sq")
     ap.add_argument("--router", default="192.168.10.1", help="stock LAN address (default 192.168.10.1)")
     ap.add_argument("--password", help="stock web UI admin password (asked if omitted)")
-    ap.add_argument("--slot", type=int, choices=(1, 2), default=1, help="slot to write (default 1)")
+    ap.add_argument("--slot", type=int, choices=(1, 2), default=None,
+                    help="slot to write (default: the slot the router is NOT running from)")
     ap.add_argument("--no-commit", action="store_true",
                     help="boot the new slot once (trial); next reboot returns to the other slot")
     ap.add_argument("--ssh-only", action="store_true", help="only enable root SSH and exit")
@@ -509,6 +643,23 @@ def main():
     if r.returncode != 0 or "ubiupdatevol" not in out:
         die("cannot run commands over SSH, or ubiupdatevol is missing:\n" + out + "\n" + r.stderr)
     say("router: " + " | ".join(l for l in out.splitlines() if l))
+
+    # Which slot is the factory firmware running from?  It is NOT always slot 2:
+    # writing the slot the router booted lands on its mounted rootfs and
+    # ubiupdatevol refuses it ("volume is busy") - reported from the field on a
+    # unit whose stock sits in slot 1.
+    m = re.search(r"committed\s+([12])", out)
+    if a.slot is None:
+        if not m:
+            die("cannot tell which slot is running (bcm_bootstate said: %s).\n"
+                "     Re-run with --slot 1 or --slot 2 once you know." % out.strip())
+        a.slot = 3 - int(m.group(1))
+        say("stock runs from slot %s, installing into slot %d"
+            % (m.group(1), a.slot))
+    elif m and int(m.group(1)) == a.slot:
+        die("slot %d is the one the router is running from - writing it would "
+            "hit the mounted rootfs. Leave --slot off to pick the free one."
+            % a.slot)
     if "BCM96764" not in out and "6764" not in out:
         die("this does not look like a BCM6764 board (model: %s)" % out.splitlines()[0])
     if a.ssh_only:

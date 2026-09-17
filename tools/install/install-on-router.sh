@@ -9,7 +9,7 @@
 #   ssh -p 2222 -i KEY root@192.168.10.1 'sh /tmp/install-on-router.sh /tmp/bootfs-release.itb /tmp/rootfs.sq'
 #
 # Options (environment variables):
-#   SLOT=1|2        slot to write (default 1; 2 = the factory slot, only if you know why)
+#   SLOT=1|2        slot to write (default: the one the router is NOT running from)
 #   COMMIT=yes|no   yes (default): make the slot permanent; no: boot it once for a trial
 #   REBOOT=yes|no   reboot at the end (default yes)
 #
@@ -18,7 +18,17 @@ set -e
 
 BOOTFS=${1:?usage: install-on-router.sh <bootfs.itb> <rootfs.sq>}
 ROOTFS=${2:?usage: install-on-router.sh <bootfs.itb> <rootfs.sq>}
-SLOT=${SLOT:-1}
+# Which slot is free?  The factory firmware is NOT always in slot 2: writing
+# the slot the router booted from lands on its mounted rootfs and ubiupdatevol
+# refuses it ("volume is busy").  SLOT= still overrides.
+if [ -z "$SLOT" ]; then
+	committed=$(bcm_bootstate 2>&1 | sed -n 's/.*committed \([12]\).*/\1/p' | head -n1)
+	case "$committed" in
+	1) SLOT=2 ;;
+	2) SLOT=1 ;;
+	*) echo "ERROR: cannot tell which slot is running (bcm_bootstate: $(bcm_bootstate 2>&1 | head -n1)). Set SLOT=1 or SLOT=2." >&2; exit 1 ;;
+	esac
+fi
 COMMIT=${COMMIT:-yes}
 REBOOT=${REBOOT:-yes}
 LEB=126976
