@@ -39,18 +39,26 @@ rm -f "$S/etc/init.d/aa-netconsole" "$S/etc/rc.d/S09aa-netconsole"
 rm -f "$S/etc/init.d/zz-diag"       "$S/etc/rc.d/S99zz-diag"
 
 # --- 3. personal data ------------------------------------------------------
-# podkop gate/subscription cache (real VLESS endpoint + UUID) and the
-# sing-box config generated from it. The firmware ships an empty podkop
-# account; the user enters their own access key in LuCI.
+# Anything the build host's own podkop left behind: the subscription cache of
+# the "Sota" repack that used to be in the staging tree (a real VLESS endpoint
+# and UUID) and the sing-box config generated from it.  The release ships the
+# plain upstream podkop with an empty proxy_string - the user enters their own
+# server in LuCI.
 say "removing personal VPN data"
-rm -f "$S/etc/podkop/sota_gate.json"
+rm -rf "$S/etc/podkop"
 rm -f "$S/etc/sing-box/config.json"
 if [ -f "$S/etc/config/podkop" ]; then
-	sed -i "s#^\t*option access_key .*#\toption access_key ''#" \
+	sed -i "s#^\t*option proxy_string .*#\toption proxy_string ''#" \
 		"$S/etc/config/podkop"
-	sed -i "s#^\t*option gate_id .*#\toption gate_id ''#" \
+	sed -i -e "/option access_key /d" -e "/option gate_id /d" \
 		"$S/etc/config/podkop"
 fi
+# podkop does not start by itself: with no access key it has nothing to route,
+# and its defaults rewrite DNS through sing-box (dns_server 1.1.1.1,
+# dont_touch_dhcp 0).  On a router placed behind another one that silently
+# replaces the upstream DNS - reported from the field.  Users who want it
+# enable it in LuCI (System -> Startup, or the Podkop page).
+rm -f "$S/etc/rc.d/S99podkop"
 
 # --- 4. generated keys/certs ----------------------------------------------
 # Baked-in dropbear host keys would be identical on every device; let dropbear

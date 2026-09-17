@@ -44,9 +44,34 @@
  */
 static const u8 sp_mac_addr[ETH_ALEN] = { 0x02, 0x10, 0x18, 0x00, 0x00, 0x02 };
 
-static unsigned int poll_us = 1000;
+/*
+ * There is no interrupt on this path (see the note at the top of the file), so
+ * the RX ring is only drained when this timer fires.  The ring is
+ * SP_NUM_RX_BUFS (32) descriptors deep: at 1 Gbit/s a full-size frame arrives
+ * every ~12 us, so the ring fills in ~390 us.  The old 1000 us period let it
+ * overflow in every gap between polls, and the resulting packet loss dragged
+ * routed TCP down to a few tens of Mbit/s (reported from the field: 36 Mbit/s
+ * over the wire, while Wi-Fi upload - which does not enter this RX path - ran
+ * at 235).  200 us keeps ~17 frames per period, inside the ring.
+ */
+static unsigned int poll_us = 200;
 module_param(poll_us, uint, 0644);
-MODULE_PARM_DESC(poll_us, "RX/TX poll period in microseconds (default 1000)");
+MODULE_PARM_DESC(poll_us, "idle RX/TX poll period in microseconds (default 200; the 32-entry RX ring overflows above ~390)");
+
+/*
+ * Servicing the ring on a fixed idle period is not enough once traffic
+ * actually flows: 32 descriptors are ~390 us of gigabit, and the depth is not
+ * ours to raise - the vendor header pins SYSPORT_NUM_RX_PKT_DESC_LOG2 at 5 for
+ * this SoC (7 elsewhere), because the descriptors live in on-chip RAM.  The
+ * vendor gets away with it by taking the interrupt; we do not have one wired,
+ * so instead the timer tightens to poll_busy_us as soon as a poll finds
+ * packets, and relaxes back to poll_us when one comes up empty.  At 20 us only
+ * about two frames can pile up between polls, far inside the ring, and the
+ * cost is paid only while there is traffic.
+ */
+static unsigned int poll_busy_us = 20;
+module_param(poll_busy_us, uint, 0644);
+MODULE_PARM_DESC(poll_busy_us, "poll period while traffic flows, microseconds (default 20)");
 
 #define SP_TX_RING		0	/* the single TX descriptor ring we use */
 #define SP_RX_QUEUE		0
@@ -106,6 +131,7 @@ struct sysport6764 {
 	bool			rx_entered;
 	bool			rx_done_once;
 	bool			budget_hit;
+	bool			busy;		/* last poll saw packets */
 };
 
 /* Broadcom tag (4 bytes after DA+SA). Egress, as the stock impl7 driver
@@ -703,6 +729,7 @@ static int sp_napi_poll(struct napi_struct *napi, int budget)
 		if (!sp->seen_rx)
 			bcm96764_mark(0x6D);
 	}
+	WRITE_ONCE(sp->busy, work > 0);
 	if (work < budget)
 		napi_complete_done(napi, work);
 	if (rx_marks)
@@ -723,6 +750,17 @@ static u64 sp_poll_ns(void)
 	return (u64)us * NSEC_PER_USEC;
 }
 
+static u64 sp_poll_busy_ns(void)
+{
+	unsigned int us = poll_busy_us;
+
+	if (us < 5)
+		us = 5;
+	if (us > poll_us)
+		us = poll_us;
+	return (u64)us * NSEC_PER_USEC;
+}
+
 static enum hrtimer_restart sp_poll_tick(struct hrtimer *t)
 {
 	struct sysport6764 *sp = container_of(t, struct sysport6764, poll_timer);
@@ -733,7 +771,8 @@ static enum hrtimer_restart sp_poll_tick(struct hrtimer *t)
 		bcm96764_mark(0x7F);
 
 	napi_schedule(&sp->napi);
-	hrtimer_forward_now(t, ns_to_ktime(sp_poll_ns()));
+	hrtimer_forward_now(t, ns_to_ktime(READ_ONCE(sp->busy) ? sp_poll_busy_ns()
+							       : sp_poll_ns()));
 	return HRTIMER_RESTART;
 }
 

@@ -22,8 +22,10 @@ behind a small open-source compatibility layer.
   ISP lease bound to the MAC keeps working.
 * **Wi-Fi**: both radios (2.4 GHz + 5 GHz, 2×2, 802.11ax) as access points,
   WPA2, clients get DHCP and NAT to the internet. 11be/MLO are not enabled yet.
-* **LuCI**, SSH, panel LEDs, watchdog-backed `reboot`, podkop/sing-box
-  preinstalled (bring your own key).
+* **LuCI**, SSH, panel LEDs, watchdog-backed `reboot`. Upstream podkop +
+  sing-box are preinstalled but **disabled**: nothing touches your DNS or
+  traffic until you enable it in LuCI (Services -> Podkop) and enter your own
+  proxy URL.
 * **Settings persist** across reboots: the firmware keeps its own UBI volume
   (`cudy66_data`, 4 MiB, UBIFS) as the overlay; the factory firmware's
   `rootfs_data` is never touched. "Perform reset" in LuCI (`firstboot`)

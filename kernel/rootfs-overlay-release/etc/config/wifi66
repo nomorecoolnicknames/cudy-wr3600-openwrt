@@ -6,3 +6,10 @@ config wifi66 'settings'
 	#   1        always (do NOT do this on a public uplink)
 	#   0        never; LAN (Wi-Fi) only
 	option wan_admin 'private'
+
+	# upstream DNS for the LAN resolver:
+	#   auto   use the servers the WAN lease gave us - the router this one is
+	#          plugged into, so its DoT / filtering / zapret keep working
+	#          (default)
+	#   <list> explicit servers, e.g. option dns '1.1.1.1 9.9.9.9'
+	option dns 'auto'

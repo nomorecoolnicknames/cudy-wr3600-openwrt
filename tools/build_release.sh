@@ -176,6 +176,11 @@ CMDLINE="console=ttyAMA0,115200 earlycon coherent_pool=4M mtdparts=spi1.0:209715
 	--set-str INITRAMFS_SOURCE "$W/initramfs $R/kernel-6.6/initramfs.list" \
 	--set-str CMDLINE "$CMDLINE"
 make -C "$SRC" O="$KBR" ARCH=arm CROSS_COMPILE="$TC" -j"$JOBS" Image
+# In-tree modules used to be taken from the tested build dir, so anything newly
+# enabled in the config (NFQUEUE for zapret, for one) silently never appeared
+# in the image - and the modules could drift from the kernel they ship with.
+# Build them from the same tree as the Image.
+make -C "$SRC" O="$KBR" ARCH=arm CROSS_COMPILE="$TC" -j"$JOBS" modules
 need "$KBR/arch/arm/boot/Image"
 
 # ---------------------------------------------------------------------------
@@ -226,9 +231,30 @@ rsync -a --exclude 'etc/uci-defaults/' "$STAGE_BASE/" "$W/rootfs/"
 # them): vendored as .ipk in kernel-6.6/pkgs with pinned checksums, unpacked
 # here. Our overlay then replaces wifi-scripts' mac80211 driver/detector.
 ( cd "$R/kernel-6.6/pkgs" && sha256sum -c --quiet SHA256SUMS ) || die "kernel-6.6/pkgs checksum mismatch"
+# The staging tree carries a podkop repack wired to the "Sota" subscription
+# service (sota_*.sh, a Sota migration, the LuCI page even renamed to "Sota
+# Connect").  We ship the plain upstream podkop instead, so drop that variant
+# first - unpacking an ipk overwrites files but never removes the ones the new
+# package does not have.
+rm -f "$W/rootfs"/usr/lib/podkop/sota_*.sh \
+      "$W/rootfs"/etc/uci-defaults/99-podkop-sota-migrate \
+      "$W/rootfs"/www/luci-static/resources/view/podkop/sota.js
+rm -rf "$W/rootfs/etc/podkop"
+
 for ipk in "$R"/kernel-6.6/pkgs/*.ipk; do
 	tar -xzOf "$ipk" ./data.tar.gz | tar -xz -C "$W/rootfs" --no-same-owner
-	echo "unpacked $(basename "$ipk")"
+	# keep the opkg database honest about what is actually installed
+	pkg=$(tar -xzOf "$ipk" ./control.tar.gz | tar -xzO ./control 2>/dev/null \
+		| sed -n 's/^Package: //p')
+	if [ -n "$pkg" ]; then
+		mkdir -p "$W/rootfs/usr/lib/opkg/info"
+		tar -xzOf "$ipk" ./control.tar.gz | tar -xzO ./control \
+			> "$W/rootfs/usr/lib/opkg/info/$pkg.control"
+		tar -xzOf "$ipk" ./data.tar.gz | tar -tz \
+			| sed -e 's#^\.##' -e '/\/$/d' \
+			> "$W/rootfs/usr/lib/opkg/info/$pkg.list"
+	fi
+	echo "unpacked $(basename "$ipk") ($pkg)"
 done
 # hostapd is driven by netifd now; static configs from older stage trees go
 rm -f "$W/rootfs"/etc/hostapd-wl*.conf
