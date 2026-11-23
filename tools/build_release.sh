@@ -22,9 +22,9 @@ set -euo pipefail
 R=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 # ---- inputs (override on the command line) --------------------------------
-SRC=${SRC:-$R/kernel-6.6/src/linux-6.6.93-h30coh}
-KB=${KB:-$R/kernel-6.6/build-h30coh}          # tested kernel build (read-only)
-KBR=${KBR:-$R/kernel-6.6/build-release}       # release kernel build (copy)
+SRC=${SRC:-$R/kernel/src/linux-6.6.93-h30coh}
+KB=${KB:-$R/kernel/build-h30coh}          # tested kernel build (read-only)
+KBR=${KBR:-$R/kernel/build-release}       # release kernel build (copy)
 TC=${TC:-$R/gpl/openwrt/21.02/build_dir/toolchains/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/bin/arm-buildroot-linux-gnueabi-}
 MK=${MK:-$R/gpl/openwrt/21.02/build_dir/host/u-boot-2021.01/tools/mkimage}
 LZ=${LZ:-$R/gpl/openwrt/21.02/staging_dir/host/bin/lzma}
@@ -32,7 +32,7 @@ STAGE_BASE=${STAGE_BASE:-/mnt/ramdisk/owrt24/sq2}          # tested rootfs stagi
 BASE_ROOTFS=${BASE_ROOTFS:-/mnt/ramdisk/owrt24/rootfs.sq}  # pristine OpenWrt base
 BLOBS=${BLOBS:-$R/triaging/shim/h30/stage-hw32}            # patched stock blobs
 STOCK=${STOCK:-$R/stock/fit}                               # loader.bin/u-boot.bin
-BUSYBOX=${BUSYBOX:-$R/kernel-6.6/build-bb/busybox}         # static busybox (initramfs)
+BUSYBOX=${BUSYBOX:-$R/kernel/build-bb/busybox}         # static busybox (initramfs)
 
 # ---- outputs --------------------------------------------------------------
 REL=${REL:-$R/release}
@@ -86,7 +86,7 @@ rsync -a --delete "$KB/" "$KBR/"
 # The kernel configuration comes from the file in the repository, not from the
 # tested build dir: the two drifted once (UBIFS enabled in the file, absent in
 # the build dir, and so absent in the image built from it).
-KCONF=$R/kernel-6.6/port/config-6.6.93-bcm96764-shim
+KCONF=$R/kernel/port/config-6.6.93-bcm96764-shim
 cp "$KCONF" "$KBR/.config"
 make -C "$SRC" O="$KBR" ARCH=arm CROSS_COMPILE="$TC" -s olddefconfig >/dev/null
 for o in UBIFS_FS OVERLAY_FS MTD_UBI_BLOCK SQUASHFS TMPFS BCM96764_OUTER_COHERENCY; do
@@ -129,13 +129,13 @@ rm -rf "$W/initramfs"
 # sysfs and devtmpfs on them, and without /dev (devtmpfs) there is no
 # /dev/ubiblock0_4, so the rootfs can never be mounted.
 mkdir -p "$W/initramfs"/{bin,dev,proc,sys,etc,sbin,tmp}
-cp "$R/kernel-6.6/initramfs-release/init" "$W/initramfs/init"
+cp "$R/kernel/initramfs-release/init" "$W/initramfs/init"
 chmod 0755 "$W/initramfs/init"
-cp "$R/kernel-6.6/initramfs-release/modules.order" "$W/initramfs/modules.order"
+cp "$R/kernel/initramfs-release/modules.order" "$W/initramfs/modules.order"
 # Optional per-module argument files: the preinit runs
 # "insmod <module> $(cat <module>.args)", which is how split=1 / tag_fmt are
 # selected without rebuilding the driver.
-for a in "$R"/kernel-6.6/initramfs-release/*.args; do
+for a in "$R"/kernel/initramfs-release/*.args; do
 	[ -f "$a" ] || continue
 	cp "$a" "$W/initramfs/$(basename "$a")"
 	echo "module args: $(basename "$a") = $(cat "$a")"
@@ -173,7 +173,7 @@ say "4/8 kernel Image"
 # can pick the release rootfs by its marker (slot 1 first, then slot 2).
 CMDLINE="console=ttyAMA0,115200 earlycon coherent_pool=4M mtdparts=spi1.0:2097152(loader),262144@2097152(bdinfo),130809856@2359296(image) ubi.mtd=image ubi.block=0,4 ubi.block=0,6 panic=5"
 "$SRC/scripts/config" --file "$KBR/.config" \
-	--set-str INITRAMFS_SOURCE "$W/initramfs $R/kernel-6.6/initramfs.list" \
+	--set-str INITRAMFS_SOURCE "$W/initramfs $R/kernel/initramfs.list" \
 	--set-str CMDLINE "$CMDLINE"
 make -C "$SRC" O="$KBR" ARCH=arm CROSS_COMPILE="$TC" -j"$JOBS" Image
 # In-tree modules used to be taken from the tested build dir, so anything newly
@@ -201,8 +201,8 @@ isz=$(stat -c%s "$KBR/arch/arm/boot/Image")
 echo "initramfs entries: $(wc -l < "$W/initramfs.list"), kernel Image: $isz bytes"
 [ "$isz" -gt 9000000 ] || die "kernel Image looks too small ($isz bytes): initramfs not embedded?"
 ( cd "$FIT" && "$LZ" e Image Image.lzma -d23 >/dev/null )
-cp "$R/kernel-6.6/port/fdt_96764SV1-66.dtb" "$FIT/fdt.dtb"
-cp "$R/kernel-6.6/port/bootfs66.its" "$FIT/bootfs66.its"
+cp "$R/kernel/port/fdt_96764SV1-66.dtb" "$FIT/fdt.dtb"
+cp "$R/kernel/port/bootfs66.its" "$FIT/bootfs66.its"
 ( cd "$FIT" && "$MK" -f bootfs66.its bootfs-release.itb >/dev/null )
 cp "$FIT/bootfs-release.itb" "$REL/bootfs-release.itb"
 bsz=$(stat -c%s "$REL/bootfs-release.itb")
@@ -212,13 +212,13 @@ echo "bootfs-release.itb: $bsz bytes ($(( (bsz + 126975) / 126976 )) LEB)"
 # WR3600H (R69): the same kernel with the R69 device tree.  The board differs
 # only in its WAN port, and the initramfs reads the flavour out of the device
 # tree, so no second kernel build is needed.  UNTESTED - no WR3600H hardware.
-cp "$R/kernel-6.6/port/fdt_96764SV1-66-R69.dtb" "$FIT/fdt.dtb"
+cp "$R/kernel/port/fdt_96764SV1-66-R69.dtb" "$FIT/fdt.dtb"
 ( cd "$FIT" && "$MK" -f bootfs66.its bootfs-wr3600h.itb >/dev/null )
 cp "$FIT/bootfs-wr3600h.itb" "$REL/bootfs-wr3600h.itb"
 hsz=$(stat -c%s "$REL/bootfs-wr3600h.itb")
 echo "bootfs-wr3600h.itb: $hsz bytes ($(( (hsz + 126975) / 126976 )) LEB)"
 [ "$hsz" -le "$BOOTFS_MAX" ] || die "WR3600H bootfs exceeds 27 LEB ($BOOTFS_MAX bytes)"
-cp "$R/kernel-6.6/port/fdt_96764SV1-66.dtb" "$FIT/fdt.dtb"
+cp "$R/kernel/port/fdt_96764SV1-66.dtb" "$FIT/fdt.dtb"
 
 # ---------------------------------------------------------------------------
 say "6/8 rootfs"
@@ -228,9 +228,9 @@ rsync -a --exclude 'etc/uci-defaults/' "$STAGE_BASE/" "$W/rootfs/"
 "$R/tools/clean_release_rootfs.sh" "$W/rootfs" "$BASE_ROOTFS"
 
 # OpenWrt packages the armsr staging tree lacks (LuCI wireless page needs
-# them): vendored as .ipk in kernel-6.6/pkgs with pinned checksums, unpacked
+# them): vendored as .ipk in kernel/pkgs with pinned checksums, unpacked
 # here. Our overlay then replaces wifi-scripts' mac80211 driver/detector.
-( cd "$R/kernel-6.6/pkgs" && sha256sum -c --quiet SHA256SUMS ) || die "kernel-6.6/pkgs checksum mismatch"
+( cd "$R/kernel/pkgs" && sha256sum -c --quiet SHA256SUMS ) || die "kernel/pkgs checksum mismatch"
 # The staging tree carries a podkop repack wired to the "Sota" subscription
 # service (sota_*.sh, a Sota migration, the LuCI page even renamed to "Sota
 # Connect").  We ship the plain upstream podkop instead, so drop that variant
@@ -241,7 +241,7 @@ rm -f "$W/rootfs"/usr/lib/podkop/sota_*.sh \
       "$W/rootfs"/www/luci-static/resources/view/podkop/sota.js
 rm -rf "$W/rootfs/etc/podkop"
 
-for ipk in "$R"/kernel-6.6/pkgs/*.ipk; do
+for ipk in "$R"/kernel/pkgs/*.ipk; do
 	tar -xzOf "$ipk" ./data.tar.gz | tar -xz -C "$W/rootfs" --no-same-owner
 	# keep the opkg database honest about what is actually installed
 	pkg=$(tar -xzOf "$ipk" ./control.tar.gz | tar -xzO ./control 2>/dev/null \
@@ -340,7 +340,7 @@ for b in "$W/rootfs/usr/share/cudy"/meta-committed*.bin; do
 done
 cp "$R/tools/install/update-from-release.sh" "$W/rootfs/usr/bin/update-from-release.sh"
 chmod 0755 "$W/rootfs/usr/bin/update-from-release.sh"
-cp -a "$R/kernel-6.6/rootfs-overlay-release/." "$W/rootfs/"
+cp -a "$R/kernel/rootfs-overlay-release/." "$W/rootfs/"
 # No git revision here on purpose: it would make the artifacts depend on the
 # commit that records them. The source package name identifies the sources.
 cat > "$W/rootfs/etc/cudy-release" <<EOF

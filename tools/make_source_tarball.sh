@@ -26,14 +26,14 @@ rm -rf "$W"
 mkdir -p "$W"/{kernel,port66,bsp-6.6,tools,docs}
 
 say "kernel side"
-cp "$R/kernel-6.6/build.sh" "$R/kernel-6.6/initramfs.list" "$W/kernel/"
-cp -a "$R/kernel-6.6/initramfs-release" "$W/kernel/"
-cp -a "$R/kernel-6.6/rootfs-overlay-release" "$W/kernel/"
-cp -a "$R/kernel-6.6/pkgs" "$W/kernel/"                 # vendored OpenWrt ipks (wifi-scripts, iwinfo) + checksums
+cp "$R/kernel/build.sh" "$R/kernel/initramfs.list" "$W/kernel/"
+cp -a "$R/kernel/initramfs-release" "$W/kernel/"
+cp -a "$R/kernel/rootfs-overlay-release" "$W/kernel/"
+cp -a "$R/kernel/pkgs" "$W/kernel/"                 # vendored OpenWrt ipks (wifi-scripts, iwinfo) + checksums
 mkdir -p "$W/kernel/port"
 rsync -a --exclude '*.itb' --exclude '*.bak*' --exclude '.omc' \
 	--exclude '*.orig' --exclude '*.rej' --exclude '*.log' \
-	"$R/kernel-6.6/port/" "$W/kernel/port/"
+	"$R/kernel/port/" "$W/kernel/port/"
 
 say "out-of-tree modules"
 for d in enet66 enet66b leds66 reboot66 shim66 vpcie66; do
