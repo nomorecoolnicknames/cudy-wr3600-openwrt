@@ -274,6 +274,8 @@ cp "$KBR"/net/wireless/cfg80211.ko \
    "$KBR"/net/sched/sch_cake.ko "$KBR"/net/sched/sch_fq_codel.ko \
    "$KBR"/net/sched/sch_htb.ko "$KBR"/net/ipv4/tcp_bbr.ko \
    "$KBR"/net/ipv6/ipv6.ko \
+   "$KBR"/drivers/net/slip/slhc.ko "$KBR"/drivers/net/ppp/ppp_generic.ko \
+   "$KBR"/drivers/net/ppp/pppox.ko "$KBR"/drivers/net/ppp/pppoe.ko \
    "$KM/"
 cp "$R/port66/enet66/enet6764.ko" "$R/port66/enet66b/serdes6764.ko" \
    "$R/port66/enet66b/extsw6764.ko" "$R/port66/leds66/leds-bca-cled.ko" \

@@ -31,7 +31,7 @@ start() {
 		 nft_ct nft_socket nft_tproxy nft_nat nft_masq nft_redir nft_chain_nat \
 		 nft_fib nft_fib_ipv4 nft_log nft_reject nft_reject_ipv4 nft_reject_ipv6 \
 		 nft_reject_inet nft_limit tun sch_cake sch_fq_codel sch_htb tcp_bbr \
-		 llc stp bridge; do
+		 llc stp bridge slhc ppp_generic pppox pppoe; do
 		insmod /lib/modules/6.6.93/$m.ko 2>/dev/null
 	done
 	insmod /lib/modules/6.6.93/cfg80211.ko 2>/dev/null
@@ -119,9 +119,15 @@ start() {
 	# --- NAT + forwarding (fw4 is disabled: its ruleset needs kernel bits we skip) ---
 	nft add table ip nat66 2>/dev/null
 	nft add chain ip nat66 post '{ type nat hook postrouting priority srcnat; }' 2>/dev/null
-	nft add rule ip nat66 post ip saddr 192.168.10.0/24 oifname eth0 masquerade 2>/dev/null
+	# Everything that leaves the LAN is masqueraded, whatever the uplink is
+	# called: with a provider VLAN it is eth0.N, with PPPoE pppoe-wan. The rule
+	# used to name eth0 and left exactly those setups without internet.
+	nft add rule ip nat66 post ip saddr 192.168.10.0/24 oifname != br-lan masquerade 2>/dev/null
 	nft add table inet fwd66 2>/dev/null
 	nft add chain inet fwd66 fw '{ type filter hook forward priority -200; policy accept; }' 2>/dev/null
+	# PPPoE/VLAN uplinks have an MTU below 1500; clamp the TCP MSS to the
+	# route, or large pages stall while small ones load
+	nft add rule inet fwd66 fw tcp flags syn tcp option maxseg size set rt mtu 2>/dev/null
 	nft add rule inet fwd66 fw ip saddr 192.168.10.0/24 accept 2>/dev/null
 	nft add rule inet fwd66 fw ip daddr 192.168.10.0/24 accept 2>/dev/null
 	# --- input policy. The wired side is the WAN, and dropbear/uhttpd listen on
@@ -140,11 +146,14 @@ start() {
 	nft add rule inet fwd66 in meta l4proto icmp accept
 	nft add rule inet fwd66 in meta l4proto ipv6-icmp accept
 	nft add rule inet fwd66 in udp dport 68 accept
-	case "$(uci -q get wifi66.settings.wan_admin)" in
-	1)       nft add rule inet fwd66 in iifname eth0 tcp dport '{ 22, 80, 443 }' accept ;;
-	0)       ;;
-	*)       nft add rule inet fwd66 in iifname eth0 ip saddr '{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }' tcp dport '{ 22, 80, 443 }' accept ;;
-	esac
+	# the uplink is eth0, or a VLAN on it (eth0.N), or a PPPoE session over either
+	for wan in eth0 'eth0.*' 'pppoe-*'; do
+		case "$(uci -q get wifi66.settings.wan_admin)" in
+		1)       nft add rule inet fwd66 in iifname "$wan" tcp dport '{ 22, 80, 443 }' accept ;;
+		0)       ;;
+		*)       nft add rule inet fwd66 in iifname "$wan" ip saddr '{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }' tcp dport '{ 22, 80, 443 }' accept ;;
+		esac
+	done
 	# The kernel kicks the watchdog only until this deadline (boot-time
 	# safety net: an unreachable userspace falls back to the other slot).
 	# 0 = no deadline. The earlier 86400 here made a healthy router reset

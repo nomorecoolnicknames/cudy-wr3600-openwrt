@@ -1,0 +1,17 @@
+#!/bin/sh
+# Keep the wired LAN in br-lan.
+#
+# br-lan is built by /etc/init.d/wifi66, not by netifd (the radios may only
+# join it after hostapd is up).  netifd therefore does not know that eth1
+# belongs to a bridge, and the moment somebody configures a VLAN on it
+# (eth1.N - a guest or IPTV VLAN on the LAN ports) netifd claims eth1 as the
+# VLAN's parent and resets it: out of the bridge on setup, link down on
+# teardown.  Either way the wired LAN went dead while Wi-Fi kept working
+# (bench, 2026-09-20).  Called from the net and iface hotplug hooks.
+[ -e /sys/class/net/eth1 ] && [ -e /sys/class/net/br-lan ] || exit 0
+if [ ! -e /sys/class/net/eth1/master ]; then
+	ip link set eth1 master br-lan 2>/dev/null &&
+		echo "cudy66: eth1 put back into br-lan" > /dev/kmsg
+fi
+ip link set eth1 up 2>/dev/null
+exit 0

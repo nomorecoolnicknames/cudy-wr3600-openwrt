@@ -1,0 +1,7 @@
+#!/bin/sh
+# see /usr/sbin/cudy-lan-repair; delayed so that it runs after netifd is done
+# with the device, not in the middle of it
+case "${INTERFACE:-}${DEVICE:-}" in
+wl*|lo) exit 0 ;;
+esac
+( sleep 2; /usr/sbin/cudy-lan-repair ) >/dev/null 2>&1 &

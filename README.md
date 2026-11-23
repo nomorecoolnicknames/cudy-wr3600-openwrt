@@ -80,6 +80,14 @@ below has been run on hardware yet.
   closed `wl.ko` DMA path expects. They were in the build tree but missing from
   the published sources; `kernel/build.sh` now applies the patch and
   `build_release.sh` fails if `olddefconfig` drops the symbol.
+* **PPPoE / provider VLANs:** the 2026-09-17 kernel has no `CONFIG_PPP` at
+  all, so `pppd` and the LuCI protocol could be configured but the session
+  never came up. PPP is now built as modules (`slhc`, `ppp_generic`, `pppox`,
+  `pppoe`); NAT and the TCP MSS clamp cover `eth0.N` and `pppoe-wan`; and
+  `cudy-lan-repair` keeps `eth1` in `br-lan` when a VLAN is configured on the
+  LAN ports — the netifd reset behind the "LuCI hangs when applying settings"
+  report. Bench: PPPoE over VLAN 200, session stable 7.6 h, 309–333 Mbit/s;
+  not tested on the physical WAN port or with PAP/CHAP.
 * Rootfs files are no longer shipped with uid/gid 1000 (`mksquashfs -all-root`);
   on an installed 2026-09-17 image `chown -R 0:0 /etc` restores dropbear
   `authorized_keys` and busybox crond.
