@@ -320,6 +320,9 @@ static int skb419_validate(struct skb419_view *skb)
 	return 0;
 }
 
+/* Slack behind skb->end that 4.19 got for free from the slab allocator. */
+#define SHIM_SKB_ALLOC_SLACK	64
+
 struct skb419_view *shim_skb_alloc(unsigned int size, gfp_t gfp)
 {
 	struct skb419_entry *e;
@@ -329,7 +332,15 @@ struct skb419_view *shim_skb_alloc(unsigned int size, gfp_t gfp)
 	size_t total;
 	u64 guard = SK419_GUARD;
 
-	if (check_add_overflow(size, 63U, &capacity))
+	/* 4.19 alloc_skb() never hands out an exactly-sized buffer: kmalloc
+	 * rounds the allocation up to the slab size, so the blob always has
+	 * slack behind skb->end and writes into it without asking (its
+	 * A-MSDU padding moves tail inline; wlc_txc_cp then pushes the 70-byte
+	 * 802.11 header). A buffer cut exactly to skb->end turns that spare
+	 * room into tail > end, skb419_validate() fails and the blob memcpy()s
+	 * to NULL in wl0-scheduler. Give every legacy buffer the same >=64
+	 * bytes of slack ksize() provided on 4.19. */
+	if (check_add_overflow(size, (u32)(SHIM_SKB_ALLOC_SLACK + 63U), &capacity))
 		return NULL;
 	capacity &= ~63U;
 	if (check_add_overflow((size_t)capacity,

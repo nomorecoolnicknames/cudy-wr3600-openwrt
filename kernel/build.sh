@@ -33,6 +33,15 @@ if ! patch -p1 --dry-run -R < "$K66/port/bcm96764.patch" >/dev/null 2>&1; then
 else
   echo "patch already applied"
 fi
+# Stock BCM6764 outer-shareable attributes (PRRR/NMRR + shareable page
+# tables). Required by the closed wl.ko DMA path; the release config enables
+# CONFIG_BCM96764_OUTER_COHERENCY, so the symbol must exist in the tree.
+if ! patch -p1 --dry-run -R < "$K66/port/coherency-outer-shareable.patch" >/dev/null 2>&1; then
+  patch -p1 < "$K66/port/coherency-outer-shareable.patch"
+  echo "coherency patch applied"
+else
+  echo "coherency patch already applied"
+fi
 cp "$K66/port/bcm96764.c" arch/arm/mach-bcm/bcm96764.c
 cp "$K66/port/bcm96764sv1-min.dts" arch/arm/boot/dts/broadcom/bcm96764sv1-min.dts
 cp "$K66/port/bcm96764_min_defconfig" arch/arm/configs/bcm96764_min_defconfig

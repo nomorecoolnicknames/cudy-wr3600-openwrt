@@ -3,6 +3,17 @@ config system
 	option timezone 'UTC'
 	option cronloglevel '8'
 
+# NTP client. The base rootfs ships sysntpd and its rc.d link, but this
+# overlay replaces /etc/config/system wholesale; without the timeserver
+# section the service starts with no servers and the clock free-runs.
+config timeserver 'ntp'
+	option enabled '1'
+	option enable_server '0'
+	list server '0.openwrt.pool.ntp.org'
+	list server '1.openwrt.pool.ntp.org'
+	list server '2.openwrt.pool.ntp.org'
+	list server '3.openwrt.pool.ntp.org'
+
 # Panel LEDs, driven by port66/leds66/leds-bca-cled.ko (brcm,bca-cleds-ctrl,v2).
 # Names come from the stock DT labels. All six are wired:
 #   status   - heartbeat, "the box is alive"

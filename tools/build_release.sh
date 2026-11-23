@@ -89,7 +89,7 @@ rsync -a --delete "$KB/" "$KBR/"
 KCONF=$R/kernel-6.6/port/config-6.6.93-bcm96764-shim
 cp "$KCONF" "$KBR/.config"
 make -C "$SRC" O="$KBR" ARCH=arm CROSS_COMPILE="$TC" -s olddefconfig >/dev/null
-for o in UBIFS_FS OVERLAY_FS MTD_UBI_BLOCK SQUASHFS TMPFS; do
+for o in UBIFS_FS OVERLAY_FS MTD_UBI_BLOCK SQUASHFS TMPFS BCM96764_OUTER_COHERENCY; do
 	grep -q "^CONFIG_$o=y" "$KBR/.config" || die "release kernel config lacks CONFIG_$o=y"
 done
 diff -q "$KCONF" "$KBR/.config" >/dev/null || \
@@ -405,8 +405,12 @@ done > "$W/foreign-modules.txt" || true
 find "$W/rootfs" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 
 # mksquashfs honours SOURCE_DATE_EPOCH on its own (it rejects -mkfs-time then)
+# -all-root: the staging tree and the overlay are assembled by an unprivileged
+# user, so without this every file keeps uid/gid 1000.  On the router that
+# breaks dropbear (authorized_keys ignored) and busybox crond (crontab
+# silently skipped), and it is not what a rootfs should ship anyway.
 mksquashfs "$W/rootfs" "$REL/rootfs.sq" -noappend -comp xz -b 262144 \
-	-no-xattrs >/dev/null
+	-all-root -no-xattrs >/dev/null
 echo "rootfs.sq: $(stat -c%s "$REL/rootfs.sq") bytes"
 
 # ---------------------------------------------------------------------------

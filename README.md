@@ -64,6 +64,28 @@ behind a small open-source compatibility layer.
   in `/etc/config/wifi66`. Change both passwords (`passwd`; Wi-Fi in LuCI or
   `/etc/config/wireless`); they now survive a reboot.
 
+## Post-release fixes (unreleased, build-tested only)
+
+The 2026-09-17 images predate these; the bench board stopped booting on
+2026-09-22 during a recovery experiment and has not been replaced, so nothing
+below has been run on hardware yet.
+
+* `bcm_shim`: every legacy skb now gets the 64-byte slack behind `skb->end`
+  that 4.19 got from `kmalloc`. This fixes the `skb_push: len 70 refused` →
+  `wl0-scheduler` NULL dereference after 5–20 minutes of traffic, and the
+  `dev_kfree_skb_thread_bulk` chain refusals that leaked skbs. Reported and
+  reproduced by NickGOD1 in issue #2.
+* `kernel/port/coherency-outer-shareable.patch`: the `CONFIG_BCM96764_OUTER_COHERENCY`
+  Kconfig entry and the stock PRRR/NMRR + shareable page-table attributes the
+  closed `wl.ko` DMA path expects. They were in the build tree but missing from
+  the published sources; `kernel/build.sh` now applies the patch and
+  `build_release.sh` fails if `olddefconfig` drops the symbol.
+* Rootfs files are no longer shipped with uid/gid 1000 (`mksquashfs -all-root`);
+  on an installed 2026-09-17 image `chown -R 0:0 /etc` restores dropbear
+  `authorized_keys` and busybox crond.
+* `/etc/config/system` carries the `timeserver` section again, so `sysntpd`
+  has servers (the overlay had replaced the base file wholesale).
+
 ## Install
 
 Four ways, none of them needs UART, TFTP or the bootloader — see
@@ -97,7 +119,9 @@ Firmware files and checksums are on the
 
 Build inputs: vanilla Linux 6.6.93, the vendor GPL toolchain, an OpenWrt
 24.10.2 armsr/armv7 rootfs and the Wi-Fi blobs from your own device;
-`tools/build_release.sh` does the whole thing (see its header).
+`tools/build_release.sh` does the whole thing (see its header). Apply both
+`kernel/port/bcm96764.patch` and `kernel/port/coherency-outer-shareable.patch`
+to the kernel tree; `kernel/build.sh` does that automatically.
 
 ## Licensing
 

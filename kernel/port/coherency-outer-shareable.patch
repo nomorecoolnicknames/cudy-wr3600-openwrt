@@ -1,0 +1,55 @@
+--- a/arch/arm/mach-bcm/Kconfig
++++ b/arch/arm/mach-bcm/Kconfig
+@@ -225,6 +225,13 @@
+ 	  This enables support for Broadcom BCA ARM A7 broadband chipsets,
+ 	  including various DSL, PON and Wireless family of chips.
+ 
++config BCM96764_OUTER_COHERENCY
++	bool "BCM6764 outer-shareable coherent DMA memory attributes"
++	depends on ARCH_BCMBCA_CORTEXA7 && !ARM_LPAE
++	help
++	  Use the stock BCM6764 ARM memory attributes for coherent WLAN DMA.
++	  Requires matching UBUS master coherency setup. Experimental port option.
++
+ config ARCH_BCMBCA_CORTEXA9
+ 	bool "Cortex-A9 SoCS"
+ 	select ARM_ERRATA_754322
+--- a/arch/arm/mm/proc-v7-2level.S
++++ b/arch/arm/mm/proc-v7-2level.S
+@@ -17,11 +17,20 @@
+ #define TTB_IRGN_WB	((1 << 0) | (1 << 6))
+ 
+ /* PTWs cacheable, inner WB not shareable, outer WB not shareable */
++#ifdef CONFIG_BCM96764_OUTER_COHERENCY
++#define TTB_FLAGS_UP	TTB_IRGN_WB|TTB_S|TTB_RGN_OC_WB
++#define PMD_FLAGS_UP	PMD_SECT_WB|PMD_SECT_S
++#else
+ #define TTB_FLAGS_UP	TTB_IRGN_WB|TTB_RGN_OC_WB
+ #define PMD_FLAGS_UP	PMD_SECT_WB
++#endif
+ 
+ /* PTWs cacheable, inner WBWA shareable, outer WBWA not shareable */
++#ifdef CONFIG_BCM96764_OUTER_COHERENCY
++#define TTB_FLAGS_SMP	TTB_IRGN_WBWA|TTB_S|TTB_RGN_OC_WBWA
++#else
+ #define TTB_FLAGS_SMP	TTB_IRGN_WBWA|TTB_S|TTB_NOS|TTB_RGN_OC_WBWA
++#endif
+ #define PMD_FLAGS_SMP	PMD_SECT_WBWA|PMD_SECT_S
+ 
+ .arch armv7-a
+@@ -136,8 +145,15 @@
+ 	 *   NS1 = PRRR[19] = 1		- normal shareable property
+ 	 *   NOS = PRRR[24+n] = 1	- not outer shareable
+ 	 */
++/* BCM6764 stock CONFIG_BCM_GLB_COHERENCY attributes.
++ * Must pair with matching UBUS master coherency configuration. */
++#ifdef CONFIG_BCM96764_OUTER_COHERENCY
++.equ	PRRR,	0x000a81a8
++.equ	NMRR,	0x555540e0
++#else
+ .equ	PRRR,	0xff0a81a8
+ .equ	NMRR,	0x40e040e0
++#endif
+ 
+ 	/*
+ 	 * Macro for setting up the TTBRx and TTBCR registers.
