@@ -94,6 +94,10 @@ below has been run on hardware yet.
 * `/etc/config/system` carries the `timeserver` section again, so `sysntpd`
   has servers (the overlay had replaced the base file wholesale).
 
+If the board does not boot, [`REPAIR_UART.md`](REPAIR_UART.md) documents the
+populated UART header and the U-Boot raw-flash commands that recover it
+without desoldering the NAND.
+
 ## Install
 
 Four ways, none of them needs UART, TFTP or the bootloader — see
